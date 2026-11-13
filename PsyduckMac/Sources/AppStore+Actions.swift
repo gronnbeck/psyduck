@@ -71,6 +71,12 @@ extension AppStore {
 
         case .createPR:
             guard let gh = ghPath else { throw ShellError.notFound("gh") }
+            // Pressed with work outstanding: commit and push it first.
+            if !((try? await git.output(["status", "--porcelain"], in: dir)) ?? "").isEmpty {
+                try await git.output(["add", "-A"], in: dir)
+                try await git.output(["commit", "-m", await commitMessage(for: workspace)], in: dir)
+            }
+            try await git.output(["push", "-u", "origin", "HEAD"], in: dir)
             let (title, body) = await pullRequestText(for: workspace)
             let base = workspace.baseRef.hasPrefix("origin/") ? String(workspace.baseRef.dropFirst(7)) : workspace.baseRef
             let result = try await Shell.run(gh, ["pr", "create", "--base", base, "--head", workspace.branch,
@@ -89,6 +95,30 @@ extension AppStore {
 
         case .viewPR, .merged, .none:
             return ""
+        }
+    }
+
+    /// The panel's "Commit" button: commit everything, don't push.
+    func commitOnly(_ id: UUID) {
+        perform(.commit, on: id)
+    }
+
+    /// Throws away every uncommitted change, untracked files included.
+    /// The view confirms first.
+    func discard(_ id: UUID) {
+        guard let workspace = workspaces.first(where: { $0.id == id }), !acting.contains(id) else { return }
+        acting.insert(id)
+        Task {
+            defer { acting.remove(id) }
+            do {
+                try await settings.git.output(["reset", "--hard", "HEAD"], in: workspace.path)
+                try await settings.git.output(["clean", "-fd"], in: workspace.path)
+                appendNote("discarded uncommitted changes", to: id)
+            } catch {
+                appendNote("discard failed: \(error.localizedDescription)", to: id, isError: true)
+            }
+            await refreshBranch(id, network: false)
+            await refreshChanges(id)
         }
     }
 

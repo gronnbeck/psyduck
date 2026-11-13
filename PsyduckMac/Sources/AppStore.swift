@@ -28,12 +28,18 @@ final class AppStore: ObservableObject {
     @Published var branches: [UUID: BranchState] = [:]
     /// Workspaces with a header action (commit, push, PR…) in flight.
     @Published var acting: Set<UUID> = []
-    /// The file open in the center pane's diff viewer, per workspace.
+    /// The file opened wide in the center pane, per workspace.
     @Published var openDiff: [UUID: DiffFile] = [:]
+    /// The file whose diff shows inline in the changes panel, per workspace.
+    @Published var selectedFile: [UUID: DiffFile] = [:]
 
     let settings: AppSettings
     private let stateURL: URL?
     private var turns: [UUID: Task<Void, Never>] = [:]
+    /// When the running turn started, for the composer's clock.
+    @Published private(set) var turnStarted: [UUID: Date] = [:]
+    /// A follow-up typed while claude was busy, sent when the turn ends.
+    @Published var queued: [UUID: String] = [:]
     /// Turns that got as far as claude's result line.
     private var finished: Set<UUID> = []
 
@@ -188,7 +194,12 @@ final class AppStore: ObservableObject {
     /// claude runs in the workspace's worktree, resuming its last session.
     func send(_ text: String, to id: UUID) {
         let message = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !message.isEmpty, !running.contains(id), let i = index(of: id) else { return }
+        guard !message.isEmpty, let i = index(of: id) else { return }
+        if running.contains(id) {
+            // Busy: hold it until this turn ends.
+            queued[id] = [queued[id], message].compactMap { $0 }.joined(separator: "\n\n")
+            return
+        }
 
         let claude: String
         do {
@@ -201,6 +212,7 @@ final class AppStore: ObservableObject {
         workspaces[i].items.append(ChatItem(kind: .user, text: message))
         let workspace = workspaces[i]
         running.insert(id)
+        turnStarted[id] = Date()
         finished.remove(id)
         streaming[id] = ""
         save()
@@ -262,17 +274,19 @@ final class AppStore: ObservableObject {
         case .text(let text):
             streaming[id] = ""
             workspaces[i].items.append(ChatItem(kind: .assistant, text: text))
-        case .toolUse(let name, let summary):
+        case .toolUse(let toolID, let name, let summary):
             streaming[id] = ""
-            workspaces[i].items.append(ChatItem(kind: .tool, text: name, detail: summary))
+            workspaces[i].items.append(ChatItem(kind: .tool, text: name, detail: summary, toolID: toolID))
+        case .toolResult(let toolID, let isError, let output):
+            guard let t = workspaces[i].items.lastIndex(where: { $0.kind == .tool && $0.toolID == toolID }) else { break }
+            workspaces[i].items[t].isError = isError
+            // Shell output becomes a terminal block; for other tools only a
+            // failure is worth showing.
+            if workspaces[i].items[t].isShell || isError {
+                workspaces[i].items[t].output = output
+            }
             // Edits land while claude works; keep the panel close behind.
             Task { await refreshChanges(id) }
-        case .toolFailed(let text):
-            if let last = workspaces[i].items.lastIndex(where: { $0.kind == .tool }) {
-                workspaces[i].items[last].isError = true
-                workspaces[i].items[last].detail = [workspaces[i].items[last].detail, text]
-                    .compactMap { $0 }.joined(separator: "\n")
-            }
         case .finished(let isError, let message, let durationMs, let cost, let sessionID):
             finished.insert(id)
             if let sessionID { workspaces[i].claudeSessionID = sessionID }
@@ -281,7 +295,10 @@ final class AppStore: ObservableObject {
             }
             var parts: [String] = []
             if let durationMs { parts.append(String(format: "%.1fs", Double(durationMs) / 1000)) }
-            if let cost { parts.append(String(format: "$%.3f", cost)) }
+            if let cost {
+                parts.append(String(format: "$%.3f", cost))
+                workspaces[i].totalCost = (workspaces[i].totalCost ?? 0) + cost
+            }
             if !parts.isEmpty {
                 workspaces[i].items.append(ChatItem(kind: .meta, text: parts.joined(separator: " · ")))
             }
@@ -295,9 +312,14 @@ final class AppStore: ObservableObject {
         }
         streaming[id] = nil
         running.remove(id)
+        turnStarted[id] = nil
         turns[id] = nil
         save()
         Task { await refreshChanges(id) }
+        // Stopping also drops the queue: the user is taking over.
+        if let next = queued.removeValue(forKey: id), !cancelled {
+            send(next, to: id)
+        }
     }
 
     // MARK: - Changes

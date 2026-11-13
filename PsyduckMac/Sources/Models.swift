@@ -26,6 +26,8 @@ struct Workspace: Codable, Identifiable, Hashable {
     /// claude's own session id, from the last turn. Passed back with
     /// `--resume` so the conversation continues.
     var claudeSessionID: String?
+    /// What every turn in this workspace has cost so far.
+    var totalCost: Double?
     var createdAt = Date()
     var items: [ChatItem] = []
 }
@@ -47,6 +49,18 @@ struct ChatItem: Codable, Identifiable, Hashable {
     var text: String
     var detail: String?
     var isError = false
+    /// For `.tool`: claude's id for the call, to match its result.
+    var toolID: String?
+    /// For `.tool`: what it returned (shell commands only), tail-trimmed.
+    var output: String?
+
+    var isShell: Bool { kind == .tool && text == "Bash" }
+
+    /// The file a tool touched, if it's a file tool.
+    var filePath: String? {
+        guard kind == .tool, ["Edit", "Write", "MultiEdit", "Read", "NotebookEdit"].contains(text) else { return nil }
+        return detail?.split(separator: "\n").first.map(String.init)
+    }
 }
 
 /// Names for new workspaces. Ducks, obviously.

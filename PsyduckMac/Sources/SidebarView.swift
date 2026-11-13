@@ -3,43 +3,62 @@ import SwiftUI
 
 struct SidebarView: View {
     @EnvironmentObject private var store: AppStore
-    @EnvironmentObject private var updater: UpdaterModel
+
+    /// "New workspace" goes to the repo you're in, else the first one.
+    private var targetRepo: Repo? {
+        store.selectedWorkspace.flatMap(store.repo(for:)) ?? store.repos.first
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Text("psyduck").font(.display(17))
+            // The traffic lights sit in this row, so the wordmark starts after them.
+            PaneHeader(leading: 80) {
+                HStack(spacing: 0) {
+                    Text("psyduck").font(.display(22)).tracking(-0.4)
+                    Text(".").font(.display(22)).foregroundStyle(Tk.brand)
+                }
                 Spacer()
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 34) // clear the traffic lights
-            .padding(.bottom, 14)
+
+            Button {
+                if let repo = targetRepo { Task { await store.newWorkspace(in: repo) } }
+            } label: {
+                HStack {
+                    Label("New workspace", systemImage: "plus")
+                    Spacer()
+                    Kbd(keys: "⌘N")
+                }
+            }
+            .buttonStyle(.tkSecondary)
+            .disabled(targetRepo == nil || targetRepo.map { store.creating.contains($0.id) } == true)
+            .keyboardShortcut("n", modifiers: .command)
+            .padding(.horizontal, 12)
+            .padding(.top, 16)
+            .padding(.bottom, 8)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 8) {
                     ForEach(store.repos) { repo in
                         RepoSection(repo: repo)
                     }
                 }
-                .padding(.horizontal, 10)
                 .padding(.bottom, 16)
             }
 
-            InkRule(vertical: false)
-            HStack(spacing: 2) {
+            Hairline()
+            HStack(spacing: 4) {
                 AddRepoButtons(compact: true)
                 Spacer()
                 Button { store.showingSettings.toggle() } label: {
-                    Image(systemName: "gearshape")
-                        .foregroundStyle(store.showingSettings ? Ink.ink : Ink.ink2)
+                    Image(systemName: "slider.horizontal.3")
                 }
-                .buttonStyle(GhostButtonStyle())
-                .help("settings")
+                .buttonStyle(.tkIcon())
+                .help("Settings (⌘,)")
+                .accessibilityLabel("Settings")
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 8)
+            .padding(8)
         }
-        .background(Ink.paper2)
+        .background(Tk.bg100)
     }
 }
 
@@ -50,33 +69,33 @@ private struct RepoSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
-                Text(repo.name).microLabel()
+                Text(repo.name).sectionLabel()
                 Spacer()
                 if store.creating.contains(repo.id) {
-                    ProgressView().controlSize(.mini)
+                    ProgressView().controlSize(.mini).frame(width: 28, height: 28)
                 } else {
                     Button { Task { await store.newWorkspace(in: repo) } } label: {
                         Image(systemName: "plus")
                     }
-                    .buttonStyle(GhostButtonStyle())
-                    .help("new workspace in \(repo.name)")
+                    .buttonStyle(.tkIcon(28))
+                    .help("Add workspace to \(repo.name)")
                 }
             }
-            .padding(.leading, 6)
+            .padding(.leading, 16)
+            .padding(.trailing, 8)
+            .padding(.top, 12)
+            .padding(.bottom, 4)
             .contextMenu {
-                Button("reveal in finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: repo.path) }
-                Button("remove from psyduck") { store.removeRepo(repo) }
+                Button("Reveal in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: repo.path) }
+                Button("Remove from psyduck") { store.removeRepo(repo) }
             }
 
-            let workspaces = store.workspaces(in: repo)
-            if workspaces.isEmpty {
-                Button("new workspace →") { Task { await store.newWorkspace(in: repo) } }
-                    .buttonStyle(GhostButtonStyle())
-                    .disabled(store.creating.contains(repo.id))
+            VStack(spacing: 2) {
+                ForEach(store.workspaces(in: repo)) { workspace in
+                    WorkspaceRow(workspace: workspace)
+                }
             }
-            ForEach(workspaces) { workspace in
-                WorkspaceRow(workspace: workspace)
-            }
+            .padding(.horizontal, 8)
         }
     }
 }
@@ -84,46 +103,57 @@ private struct RepoSection: View {
 private struct WorkspaceRow: View {
     @EnvironmentObject private var store: AppStore
     let workspace: Workspace
+    @State private var hovering = false
 
     var body: some View {
-        let selected = store.selection == workspace.id
-        let count = store.changes[workspace.id]?.count ?? 0
+        let selected = store.selection == workspace.id && !store.showingSettings
+        let running = store.isRunning(workspace.id)
         Button {
             store.selection = workspace.id
             store.showingSettings = false
         } label: {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(store.isRunning(workspace.id) ? Ink.leaf : Ink.ink4)
-                    .frame(width: 7, height: 7)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(workspace.name).font(.sans(13, selected ? .semibold : .regular))
-                    Text(workspace.branch).font(.mono(10)).foregroundStyle(Ink.ink3).lineLimit(1)
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(workspace.name).font(.sans(13, .semibold)).foregroundStyle(Tk.ink)
+                    Text(workspace.branch).font(.mono(12)).foregroundStyle(Tk.inkMuted).lineLimit(1)
                 }
-                Spacer()
-                if count > 0 {
-                    Text("\(count)").font(.mono(10, .medium)).foregroundStyle(Ink.ink3)
+                Spacer(minLength: 4)
+                HStack(spacing: 6) {
+                    Circle().fill(running ? Tk.info : Tk.success).frame(width: 8, height: 8)
+                    Text(running ? "Running" : "Ready").font(.sans(12)).foregroundStyle(Tk.inkMuted)
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background {
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: Tk.radiusMd, style: .continuous)
+                    .fill(selected || hovering ? Tk.bg300 : .clear)
+            )
+            .overlay(alignment: .leading) {
                 if selected {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Ink.paper)
-                        .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(Ink.ink, lineWidth: Ink.border))
+                    Capsule().fill(Tk.brand).frame(width: 3).padding(.vertical, 8)
                 }
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .contextMenu {
-            Button("reveal worktree in finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: workspace.path) }
-            Button("copy worktree path") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(workspace.path, forType: .string)
-            }
-            Divider()
-            Button("archive (remove worktree, keep branch)") { Task { await store.archive(workspace) } }
+        .onHover { hovering = $0 }
+        .contextMenu { WorkspaceMenuItems(workspace: workspace) }
+    }
+}
+
+/// Shared by the row's context menu and the session header's "…" menu.
+struct WorkspaceMenuItems: View {
+    @EnvironmentObject private var store: AppStore
+    let workspace: Workspace
+
+    var body: some View {
+        Button("Reveal worktree in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: workspace.path) }
+        Button("Copy worktree path") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(workspace.path, forType: .string)
         }
+        Divider()
+        Button("Archive (remove worktree, keep branch)") { Task { await store.archive(workspace) } }
     }
 }

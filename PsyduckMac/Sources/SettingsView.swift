@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Settings, as a page inside the main window (not a separate window). It
-/// takes over the chat and changes panes; the sidebar stays.
+/// Settings, as a page inside the main window. It takes over the session and
+/// changes panes; the sidebar stays.
 struct SettingsView: View {
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var updater: UpdaterModel
@@ -12,44 +12,42 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
+            PaneHeader(leading: 12, trailing: 16) {
                 Button { store.showingSettings = false } label: {
-                    Label("back", systemImage: "chevron.left")
+                    Label("Back", systemImage: "chevron.left")
                 }
-                .buttonStyle(GhostButtonStyle())
+                .buttonStyle(.tkGhost)
                 .keyboardShortcut(.escape, modifiers: [])
-                Text("settings").font(.sans(16, .semibold))
+                Text("Settings").font(.sans(15, .semibold))
                 Spacer()
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 14)
-            .padding(.bottom, 10)
-            InkRule(vertical: false)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 26) {
-                    section("claude") {
-                        row("path to claude", hint: "the claude code cli psyduck runs in each worktree") {
+                VStack(alignment: .leading, spacing: 24) {
+                    Text("Settings").font(.display(22))
+
+                    section("Claude") {
+                        row("Path to claude", hint: "The Claude Code CLI psyduck runs in each worktree.") {
                             HStack(spacing: 8) {
-                                field($settings.claudePath, placeholder: "~/.local/bin/claude")
-                                Button("detect") {
+                                TkTextField(text: $settings.claudePath, placeholder: "~/.local/bin/claude")
+                                Button("Detect") {
                                     Task {
                                         if let found = await Shell.detect("claude") { settings.claudePath = found }
                                         await check()
                                     }
                                 }
-                                .buttonStyle(InkButtonStyle(fill: Ink.paper, small: true))
-                                Button("check") { Task { await check() } }
-                                    .buttonStyle(InkButtonStyle(fill: Ink.paper, small: true))
+                                .buttonStyle(.tkSecondary)
+                                Button("Check") { Task { await check() } }
+                                    .buttonStyle(.tkSecondary)
+                            }
+                            if let claudeCheck {
+                                Text(claudeCheck)
+                                    .font(.mono(12))
+                                    .foregroundStyle(claudeOK ? Tk.success : Tk.danger)
+                                    .textSelection(.enabled)
                             }
                         }
-                        if let claudeCheck {
-                            Text(claudeCheck)
-                                .font(.mono(11))
-                                .foregroundStyle(claudeOK ? Ink.leaf : Ink.berry)
-                                .textSelection(.enabled)
-                        }
-                        row("permissions", hint: "what claude may do without asking. the worktree keeps edits off your checkout, but it isn't a sandbox.") {
+                        row("Permissions", hint: "What Claude may do without asking. The worktree keeps edits off your checkout, but it isn't a sandbox.") {
                             Picker("", selection: $settings.permissionMode) {
                                 ForEach(AppSettings.permissionModes, id: \.id) { mode in
                                     Text(mode.label).tag(mode.id)
@@ -59,51 +57,52 @@ struct SettingsView: View {
                             .pickerStyle(.radioGroup)
                             .font(.sans(13))
                         }
-                        row("model", hint: "an alias like opus or sonnet, or a full model name. empty uses claude's default.") {
-                            field($settings.model, placeholder: "claude's default")
+                        row("Model", hint: "An alias like opus or sonnet, or a full model name. Empty uses Claude's default.") {
+                            TkTextField(text: $settings.model, placeholder: "Claude's default")
                         }
                     }
 
-                    section("git") {
-                        row("path to git", hint: nil) {
-                            field($settings.gitPath, placeholder: "/usr/bin/git")
+                    section("Git") {
+                        row("Path to git", hint: nil) {
+                            TkTextField(text: $settings.gitPath, placeholder: "/usr/bin/git")
                         }
-                        row("worktrees go in", hint: "each workspace is <here>/<repo>/<name>") {
-                            field($settings.workspacesRoot, placeholder: AppSettings.defaultWorkspacesRoot)
+                        row("Worktrees go in", hint: "Each workspace is <here>/<repo>/<name>.") {
+                            TkTextField(text: $settings.workspacesRoot, placeholder: AppSettings.defaultWorkspacesRoot)
                         }
-                        row("cloned repos go in", hint: nil) {
-                            field($settings.reposRoot, placeholder: AppSettings.defaultReposRoot)
+                        row("Cloned repos go in", hint: nil) {
+                            TkTextField(text: $settings.reposRoot, placeholder: AppSettings.defaultReposRoot)
                         }
                     }
 
-                    section("about") {
+                    section("About") {
                         HStack {
-                            Text(updater.versionDescription).font(.mono(12)).foregroundStyle(Ink.ink2)
+                            Text(updater.versionDescription).font(.mono(12)).foregroundStyle(Tk.inkMuted)
                             Spacer()
-                            Button("check for updates →") { updater.checkForUpdates() }
-                                .buttonStyle(InkButtonStyle(fill: Ink.paper, small: true))
+                            Button("Check for updates") { updater.checkForUpdates() }
+                                .buttonStyle(.tkSecondary)
                                 .disabled(!updater.canCheckForUpdates)
                         }
                     }
                 }
-                .padding(24)
-                .frame(maxWidth: 680, alignment: .leading)
+                .padding(.horizontal, 48)
+                .padding(.vertical, 32)
+                .frame(maxWidth: 720, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .background(Ink.paper)
+        .background(Tk.bg000)
         .task { await check() }
     }
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title).microLabel()
-            VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).sectionLabel()
+            VStack(alignment: .leading, spacing: 20) {
                 content()
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .inkBox(10, fill: Ink.paper2)
+            .tkCard(Tk.radiusLg, fill: Tk.bg100)
         }
     }
 
@@ -111,20 +110,10 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label).font(.sans(13, .semibold))
             if let hint {
-                Text(hint).font(.sans(12)).foregroundStyle(Ink.ink3)
+                Text(hint).font(.sans(12)).foregroundStyle(Tk.inkMuted)
             }
             content()
         }
-    }
-
-    private func field(_ text: Binding<String>, placeholder: String) -> some View {
-        TextField("", text: text, prompt: Text(placeholder).foregroundStyle(Ink.ink4))
-            .textFieldStyle(.plain)
-            .font(.mono(12))
-            .foregroundStyle(Ink.ink)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .inkBox(6, fill: Ink.paper)
     }
 
     private func check() async {

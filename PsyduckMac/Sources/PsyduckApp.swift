@@ -18,7 +18,7 @@ struct PsyduckApp: App {
                 .environmentObject(settings)
                 .environmentObject(store)
                 .environmentObject(updater)
-                .frame(minWidth: 1000, minHeight: 620)
+                .frame(minWidth: 1080, minHeight: 640)
                 .task {
                     if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
                         await settings.detectMissing()

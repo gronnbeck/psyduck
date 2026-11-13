@@ -17,7 +17,7 @@ final class ClaudeStreamTests: XCTestCase {
 
     func testAssistantTextAndToolUse() {
         let line = #"{"type":"assistant","message":{"content":[{"type":"text","text":"on it"},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls -la\nmore","description":"list"}}]},"parent_tool_use_id":null}"#
-        XCTAssertEqual(parse(line), [.text("on it"), .toolUse(name: "Bash", summary: "ls -la")])
+        XCTAssertEqual(parse(line), [.text("on it"), .toolUse(id: "t1", name: "Bash", summary: "ls -la")])
     }
 
     func testSubagentMessagesAreIgnored() {
@@ -27,7 +27,9 @@ final class ClaudeStreamTests: XCTestCase {
 
     func testFailedToolResult() {
         let line = #"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"permission denied"}]}}"#
-        XCTAssertEqual(parse(line), [.toolFailed("permission denied")])
+        XCTAssertEqual(parse(line), [.toolResult(id: "t1", isError: true, output: "permission denied")])
+        let ok = #"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","content":[{"type":"text","text":"48 runs, 0 failures"}]}]}}"#
+        XCTAssertEqual(parse(ok), [.toolResult(id: "t2", isError: false, output: "48 runs, 0 failures")])
     }
 
     func testResult() {
@@ -207,6 +209,9 @@ final class LiveClaudeTests: XCTestCase {
         print("TRANSCRIPT:", items.map { "\($0.kind): \($0.text) \($0.detail ?? "")" })
         XCTAssertFalse(items.contains { $0.kind == .error })
         XCTAssertTrue(items.contains { $0.kind == .tool })
+        let shell = items.first { $0.isShell }
+        print("SHELL OUTPUT:", shell?.output ?? "nil")
+        XCTAssertEqual(shell?.output?.contains("quack"), true, "shell output wasn't captured")
         XCTAssertTrue(items.contains { $0.kind == .assistant })
         XCTAssertNotNil(store.selectedWorkspace?.claudeSessionID)
         XCTAssertTrue(FileManager.default.fileExists(atPath: workspace.path + "/duck.txt"))
@@ -231,7 +236,7 @@ final class PrimaryActionTests: XCTestCase {
         XCTAssertEqual(PrimaryAction.decide(s), .none)
 
         s.dirty = true
-        XCTAssertEqual(PrimaryAction.decide(s), .commitAndPush)
+        XCTAssertEqual(PrimaryAction.decide(s), .createPR, "no PR yet: commit, push and open one")
         s.behind = 2
         XCTAssertEqual(PrimaryAction.decide(s), .pull, "catch up with the remote first")
         s.behind = 0; s.dirty = false
@@ -243,6 +248,10 @@ final class PrimaryActionTests: XCTestCase {
         s.ahead = 1
         XCTAssertEqual(PrimaryAction.decide(s), .push)
         s.ahead = 0
+
+        s.pr = pr; s.dirty = true
+        XCTAssertEqual(PrimaryAction.decide(s), .commitAndPush, "PR open: update it")
+        s.dirty = false
 
         var draft = pr; draft.isDraft = true
         s.pr = draft
@@ -289,7 +298,7 @@ final class PrimaryActionTests: XCTestCase {
         var s = await state()
         XCTAssertTrue(s.dirty)
         XCTAssertTrue(s.hasRemote)
-        XCTAssertEqual(PrimaryAction.decide(s), .commitAndPush)
+        XCTAssertEqual(PrimaryAction.decide(s), .createPR)
 
         try await git.output(["add", "-A"], in: dir)
         try await git.output(["commit", "-m", "b"], in: dir)
@@ -354,7 +363,7 @@ extension LiveClaudeTests {
 
         try "fn add(a, b) = a + b\n".write(toFile: workspace.path + "/math.txt", atomically: true, encoding: .utf8)
         await store.refreshBranch(workspace.id, network: true)
-        XCTAssertEqual(store.primaryAction(for: workspace.id), .commitAndPush)
+        XCTAssertEqual(store.primaryAction(for: workspace.id), .createPR)
 
         store.perform(.commitAndPush, on: workspace.id)
         try await Task.sleep(for: .milliseconds(200))

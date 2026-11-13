@@ -23,15 +23,22 @@ so this project's Claude session is a bare `claude`, not kekkai.
   configurable in settings.
 - **Primary action** (top-right of the window, head of the changes panel):
   one button, the next step for the branch, picked by `PrimaryAction.decide`
-  in this order: pull (behind remote) → commit & push (dirty) → push (unpushed)
-  → create PR → ready for review (draft) → view PR. git and gh do the work
+  in this order: pull (behind remote) → dirty: Create PR (commits, pushes and
+  opens it) or Commit & push if a PR is open → push (unpushed) → Create PR →
+  Ready for review (draft) → view PR. The panel's bottom bar adds Discard
+  (confirmed) and Commit (no push) while there's uncommitted work. git and gh do the work
   directly, never the chat agent, so it works in any permission mode; claude
   (haiku, `--tools ""`) only writes the commit message and PR title/body. New
   actions go in that enum. Fetch + `gh pr view` run every ~32s, local status
   every 4s.
 - **Settings** is a page inside the main window (⌘, and the gear), not a
-  separate Settings window. The app is light-appearance only.
-- Design: the np.lol design system (`Theme.swift`, bundled fonts), amber accent.
+  separate Settings window.
+- **Design:** the Tinker design system, from the Claude Design canvas
+  "Psyduck in Tinker" (https://claude.ai/artifact/0dae2f4b-8d85-49e5-a14e-36533dce43df,
+  screens `Main.dc.html` and `Working.dc.html`, tokens in
+  `project/ds/tinker/tokens.json`). The canvas is the spec. `Theme.swift` (`Tk`)
+  holds every token; dark and light both follow the system appearance. Fonts:
+  Inter (UI), Bricolage Grotesque (display), JetBrains Mono (code), all bundled.
 
 ## Code map (`PsyduckMac/Sources`)
 - `AppStore` — repos, workspaces, persistence (`state.json` in Application

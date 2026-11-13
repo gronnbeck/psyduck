@@ -18,9 +18,9 @@ final class AppSettings: ObservableObject {
     @Published var model: String { didSet { defaults.set(model, forKey: "model") } }
 
     static let permissionModes: [(id: String, label: String)] = [
-        ("bypassPermissions", "bypass — claude runs any tool without asking"),
-        ("acceptEdits", "accept edits — other tools only if your claude settings allow them"),
-        ("plan", "plan — read only, no changes"),
+        ("bypassPermissions", "Bypass: Claude runs any tool without asking"),
+        ("acceptEdits", "Accept edits: other tools only if your Claude settings allow them"),
+        ("plan", "Plan: read only, no changes"),
     ]
 
     static var defaultWorkspacesRoot: String { "~/psyduck/workspaces" }

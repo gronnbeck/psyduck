@@ -7,8 +7,9 @@ enum ClaudeEvent: Equatable {
     case textDelta(String)
     /// A finished text block. Supersedes the deltas before it.
     case text(String)
-    case toolUse(name: String, summary: String)
-    case toolFailed(String)
+    case toolUse(id: String, name: String, summary: String)
+    /// What a tool returned. Shown for shell commands, as a terminal block.
+    case toolResult(id: String, isError: Bool, output: String)
     case finished(isError: Bool, message: String?, durationMs: Int?, costUSD: Double?, sessionID: String?)
 }
 
@@ -47,7 +48,8 @@ enum ClaudeStream {
                     return .text(text)
                 case "tool_use":
                     let name = block["name"] as? String ?? "tool"
-                    return .toolUse(name: name, summary: summarize(block["input"] as? [String: Any] ?? [:]))
+                    return .toolUse(id: block["id"] as? String ?? "", name: name,
+                                    summary: summarize(block["input"] as? [String: Any] ?? [:]))
                 default:
                     return nil
                 }
@@ -56,8 +58,10 @@ enum ClaudeStream {
         case "user":
             let blocks = (object["message"] as? [String: Any])?["content"] as? [[String: Any]] ?? []
             return blocks.compactMap { block in
-                guard block["type"] as? String == "tool_result", block["is_error"] as? Bool == true else { return nil }
-                return .toolFailed(resultText(block["content"]))
+                guard block["type"] as? String == "tool_result" else { return nil }
+                return .toolResult(id: block["tool_use_id"] as? String ?? "",
+                                   isError: block["is_error"] as? Bool == true,
+                                   output: resultText(block["content"]))
             }
 
         case "result":
@@ -86,10 +90,17 @@ enum ClaudeStream {
     }
 
     private static func resultText(_ content: Any?) -> String {
-        if let text = content as? String { return String(text.prefix(400)) }
-        if let blocks = content as? [[String: Any]] {
-            return String(blocks.compactMap { $0["text"] as? String }.joined(separator: "\n").prefix(400))
+        let text: String
+        if let string = content as? String {
+            text = string
+        } else if let blocks = content as? [[String: Any]] {
+            text = blocks.compactMap { $0["text"] as? String }.joined(separator: "\n")
+        } else {
+            text = ""
         }
-        return "tool failed"
+        // Long output is kept to its tail: that's where test summaries and errors are.
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        let tail = lines.count > 40 ? ["…"] + lines.suffix(40) : lines[...]
+        return String(tail.joined(separator: "\n").suffix(6_000))
     }
 }

@@ -23,12 +23,13 @@ final class ScreenRenderTests: XCTestCase {
         await store.refreshChanges(workspace.id)
         await store.refreshBranch(workspace.id, network: false)
 
-        func render(_ name: String, _ view: some View, width: CGFloat = 1280, height: CGFloat = 800) async throws {
+        func render(_ name: String, _ view: some View, dark: Bool, width: CGFloat = 1440, height: CGFloat = 900) async throws {
             let root = view.environmentObject(settings).environmentObject(store).environmentObject(updater)
                 .frame(width: width, height: height)
             let hosting = NSHostingView(rootView: root)
             hosting.frame = NSRect(x: 0, y: 0, width: width, height: height)
             let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
             window.isReleasedWhenClosed = false
             window.contentView = hosting
             window.orderFrontRegardless()
@@ -41,12 +42,16 @@ final class ScreenRenderTests: XCTestCase {
             try png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(name).png"))
         }
 
-        try await render("1-chat", ShellView())
-        let file = try XCTUnwrap(store.changes[workspace.id]?.first { $0.path.hasSuffix("Theme.swift") })
+        let file = store.changes[workspace.id]?.first { $0.path.hasSuffix("Theme.swift") }
+        store.selectedFile[workspace.id] = file
+        for dark in [true, false] {
+            let suffix = dark ? "dark" : "light"
+            try await render("1-session-\(suffix)", ShellView(), dark: dark)
+        }
         store.openDiff[workspace.id] = file
-        try await render("2-diff", ShellView())
+        try await render("2-diff-dark", ShellView(), dark: true)
         store.openDiff[workspace.id] = nil
         store.showingSettings = true
-        try await render("3-settings", ShellView())
+        try await render("3-settings-dark", ShellView(), dark: true)
     }
 }

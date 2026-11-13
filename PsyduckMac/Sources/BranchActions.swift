@@ -39,15 +39,15 @@ enum PrimaryAction: Equatable {
 
     var title: String {
         switch self {
-        case .pull: return "pull"
-        case .commit: return "commit"
-        case .commitAndPush: return "commit & push"
-        case .push: return "push"
-        case .createPR: return "create pr"
-        case .markReady: return "ready for review"
-        case .viewPR(let pr): return "view pr #\(pr.number)"
-        case .merged(let pr): return "merged #\(pr.number)"
-        case .none: return "no changes"
+        case .pull: return "Pull"
+        case .commit: return "Commit"
+        case .commitAndPush: return "Commit & push"
+        case .push: return "Push"
+        case .createPR: return "Create PR"
+        case .markReady: return "Ready for review"
+        case .viewPR(let pr): return "PR #\(pr.number)"
+        case .merged(let pr): return "Merged #\(pr.number)"
+        case .none: return "Create PR"
         }
     }
 
@@ -57,11 +57,11 @@ enum PrimaryAction: Equatable {
         case .commit: return "commit every change (no remote to push to)"
         case .commitAndPush: return "commit every change with a message claude writes, then push"
         case .push: return "push local commits"
-        case .createPR: return "open a pull request, with a title and description claude writes"
+        case .createPR: return "commit anything outstanding, push, and open a pull request with a title and description claude writes"
         case .markReady: return "mark the draft pull request ready for review"
         case .viewPR: return "open the pull request in the browser"
         case .merged: return "the pull request is merged"
-        case .none: return "nothing to commit, push or open yet"
+        case .none: return "nothing to open a PR with yet"
         }
     }
 
@@ -70,7 +70,12 @@ enum PrimaryAction: Equatable {
     static func decide(_ state: BranchState) -> PrimaryAction {
         if let pr = state.pr, pr.state == "MERGED" { return .merged(pr) }
         if state.hasRemote && state.behind > 0 { return .pull }
-        if state.dirty { return state.hasRemote ? .commitAndPush : .commit }
+        if state.dirty {
+            guard state.hasRemote else { return .commit }
+            // No PR yet: one press commits, pushes and opens it.
+            if let pr = state.pr, pr.state == "OPEN" { return .commitAndPush }
+            return .createPR
+        }
         guard state.hasRemote else { return .none }
         if state.ahead > 0 || (!state.hasUpstream && state.commitsSinceBase > 0) { return .push }
         if let pr = state.pr, pr.state == "OPEN" {
@@ -113,5 +118,16 @@ extension Git {
             }
         }
         return state
+    }
+}
+
+extension PrimaryAction {
+    /// Actions that change files or history in the worktree — held back
+    /// while Claude is editing it.
+    var touchesWorkTree: Bool {
+        switch self {
+        case .pull, .commit, .commitAndPush, .createPR: return true
+        default: return false
+        }
     }
 }

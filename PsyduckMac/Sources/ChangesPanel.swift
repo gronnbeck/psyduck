@@ -1,58 +1,95 @@
 import SwiftUI
 
-/// The right-hand panel: every file the workspace has changed since it was
-/// cut from its base. Clicking one opens its diff in the center pane.
+/// The right-hand panel: the branch's next step (top right), every file the
+/// workspace changed since its base, the selected file's diff inline, and
+/// Discard / Commit while there's uncommitted work.
 struct ChangesPanel: View {
     @EnvironmentObject private var store: AppStore
     let workspace: Workspace
+    @State private var confirmDiscard = false
 
     private var files: [DiffFile] { store.changes[workspace.id] ?? [] }
+    private var selected: DiffFile? {
+        guard let file = store.selectedFile[workspace.id] else { return nil }
+        return files.first { $0.path == file.path }
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            PrimaryActionBar(workspace: workspace)
-            InkRule(vertical: false)
-            HStack {
-                Text("changes").microLabel()
-                Text("\(files.count)").font(.mono(11, .medium)).foregroundStyle(Ink.ink3)
-                Spacer()
-                let added = files.compactMap(\.additions).reduce(0, +)
-                let removed = files.compactMap(\.deletions).reduce(0, +)
-                if added + removed > 0 {
-                    Text("+\(added)").font(.mono(11)).foregroundStyle(Ink.leaf)
-                    Text("−\(removed)").font(.mono(11)).foregroundStyle(Ink.berry)
-                }
-                Button { Task { await store.refreshChanges(workspace.id) } } label: {
+        VStack(spacing: 0) {
+            PaneHeader {
+                Text("Changes").sectionLabel()
+                Text("\(files.count)")
+                    .font(.mono(12, .medium))
+                    .foregroundStyle(files.isEmpty ? Tk.inkMuted : Tk.onBrand)
+                    .padding(.horizontal, 6)
+                    .background(Capsule().fill(files.isEmpty ? Tk.bg300 : Tk.brand))
+                Spacer(minLength: 4)
+                Button { Task { await store.refreshChanges(workspace.id); await store.refreshBranch(workspace.id, network: true) } } label: {
                     Image(systemName: "arrow.clockwise")
                 }
-                .buttonStyle(GhostButtonStyle())
-                .help("refresh")
+                .buttonStyle(.tkIcon())
+                .keyboardShortcut("r", modifiers: .command)
+                .help("Refresh changes (⌘R)")
+                PrimaryActionButton(workspace: workspace)
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 14)
-            .padding(.bottom, 10)
-            InkRule(vertical: false)
 
             if files.isEmpty {
-                VStack(spacing: 6) {
-                    Text("no changes yet").font(.sans(13)).foregroundStyle(Ink.ink3)
-                    Text("against \(workspace.baseRef)").font(.mono(11)).foregroundStyle(Ink.ink4)
+                VStack(spacing: 12) {
+                    Image(systemName: "doc.badge.ellipsis")
+                        .font(.system(size: 34, weight: .light))
+                        .foregroundStyle(Tk.inkMuted, Tk.brand)
+                    Text("No changes yet").font(.display(22))
+                    (Text("Nothing differs from ") + Text(workspace.baseRef).font(.mono(12)).foregroundColor(Tk.ink)
+                        + Text(". Ask Claude to poke at something and diffs land here."))
+                        .font(.sans(13))
+                        .lineSpacing(3)
+                        .foregroundStyle(Tk.inkMuted)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 240)
                 }
+                .padding(32)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 1) {
+                    VStack(spacing: 2) {
                         ForEach(files) { file in
-                            FileRow(file: file, selected: store.openDiff[workspace.id]?.path == file.path) {
-                                store.openDiff[workspace.id] = file
+                            FileRow(file: file, selected: selected?.path == file.path) {
+                                store.selectedFile[workspace.id] = selected?.path == file.path ? nil : file
                             }
                         }
                     }
                     .padding(8)
+                    if let selected {
+                        InlineDiff(workspace: workspace, file: selected)
+                            .padding(.horizontal, 8)
+                            .padding(.bottom, 8)
+                    }
                 }
             }
+
+            if store.branches[workspace.id]?.dirty == true && !files.isEmpty {
+                Hairline()
+                HStack(spacing: 8) {
+                    Button { confirmDiscard = true } label: { Text("Discard").frame(maxWidth: .infinity) }
+                        .buttonStyle(.tkSecondary)
+                    Button { store.commitOnly(workspace.id) } label: {
+                        HStack(spacing: 6) { Text("Commit"); Kbd(keys: "⌘S", onBrand: true) }.frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.tkPrimary)
+                    .keyboardShortcut("s", modifiers: .command)
+                    .help("Commit everything with a message Claude writes. Doesn't push.")
+                }
+                .disabled(store.acting.contains(workspace.id) || store.isRunning(workspace.id))
+                .padding(12)
+            }
         }
-        .background(Ink.paper2)
+        .background(Tk.bg100)
+        .confirmationDialog("Discard every uncommitted change in \(workspace.name)?",
+                            isPresented: $confirmDiscard) {
+            Button("Discard changes", role: .destructive) { store.discard(workspace.id) }
+        } message: {
+            Text("Untracked files are deleted too. Commits stay.")
+        }
         .task(id: workspace.id) {
             // Catches edits made outside psyduck too, while the workspace is
             // open. The remote and GitHub are asked every eighth round only.
@@ -67,117 +104,145 @@ struct ChangesPanel: View {
     }
 }
 
-private struct FileRow: View {
-    let file: DiffFile
-    let selected: Bool
-    let open: () -> Void
-
-    var body: some View {
-        Button(action: open) {
-            HStack(spacing: 8) {
-                Text(file.status == .untracked ? "A" : file.status.rawValue)
-                    .font(.mono(10, .bold))
-                    .foregroundStyle(file.status.color)
-                    .frame(width: 12)
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(file.fileName).font(.mono(12, selected ? .semibold : .regular)).lineLimit(1)
-                    if !file.directory.isEmpty {
-                        Text(file.directory).font(.mono(10)).foregroundStyle(Ink.ink3)
-                            .lineLimit(1).truncationMode(.head)
-                    }
-                }
-                Spacer(minLength: 4)
-                if let a = file.additions, let d = file.deletions {
-                    Text("+\(a)").font(.mono(10)).foregroundStyle(Ink.leaf)
-                    Text("−\(d)").font(.mono(10)).foregroundStyle(Ink.berry)
-                } else if file.status == .untracked {
-                    Text("new").font(.mono(10)).foregroundStyle(Ink.leaf)
-                } else {
-                    Text("bin").font(.mono(10)).foregroundStyle(Ink.ink3)
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Ink.paper : .clear))
-            .overlay {
-                if selected {
-                    RoundedRectangle(cornerRadius: 6).strokeBorder(Ink.ink, lineWidth: Ink.border)
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-/// The top-right corner: the one next step for this branch — pull, commit &
-/// push, create a PR, ready it for review — chosen by `PrimaryAction.decide`.
-private struct PrimaryActionBar: View {
+/// The top-right button: the one next step for this branch, chosen by
+/// `PrimaryAction.decide` — pull, commit & push, create a PR, ready it.
+private struct PrimaryActionButton: View {
     @EnvironmentObject private var store: AppStore
     let workspace: Workspace
 
     var body: some View {
         let action = store.primaryAction(for: workspace.id)
         let busy = store.acting.contains(workspace.id)
-        let running = store.isRunning(workspace.id)
-        let state = store.branches[workspace.id]
+        let blocked = store.isRunning(workspace.id) && action.touchesWorkTree
 
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(workspace.branch).font(.mono(11, .medium)).lineLimit(1).truncationMode(.middle)
-                Text(summary(state)).font(.mono(10)).foregroundStyle(Ink.ink3).lineLimit(1)
-            }
-            Spacer(minLength: 6)
-            if busy { ProgressView().controlSize(.small) }
-            Button {
-                store.perform(action, on: workspace.id)
-            } label: {
-                HStack(spacing: 4) {
-                    Text(action.title)
-                    if case .viewPR = action { Image(systemName: "arrow.up.right") }
-                    if case .merged = action { Image(systemName: "arrow.up.right") }
+        Button {
+            store.perform(action, on: workspace.id)
+        } label: {
+            HStack(spacing: 6) {
+                if busy {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: icon(action)).font(.system(size: 12, weight: .medium))
                 }
+                Text(action.title)
             }
-            .buttonStyle(InkButtonStyle(fill: fill(action), small: true))
-            // Committing under claude's feet would race its edits.
-            .disabled(action == .none || busy || (running && action.touchesWorkTree))
-            .help(running && action.touchesWorkTree ? "wait for claude to finish" : action.help)
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 12)
-        .padding(.bottom, 10)
+        .buttonStyle(TkButtonStyle(kind: emphasised(action) ? .primary : .secondary))
+        .disabled(action == .none || busy || blocked)
+        .help(blocked ? "Wait for Claude to finish" : action.help)
     }
 
-    private func fill(_ action: PrimaryAction) -> Color {
+    private func emphasised(_ action: PrimaryAction) -> Bool {
         switch action {
-        case .createPR, .commitAndPush, .commit, .push: return Ink.accent
-        case .pull: return Ink.amber
-        case .markReady: return Ink.acid
-        case .viewPR, .merged, .none: return Ink.paper
+        case .pull, .markReady: return true
+        default: return false
         }
     }
 
-    private func summary(_ state: BranchState?) -> String {
-        guard let state else { return "checking…" }
-        var parts: [String] = []
-        if state.dirty { parts.append("uncommitted") }
-        if state.ahead > 0 { parts.append("↑\(state.ahead)") }
-        if state.behind > 0 { parts.append("↓\(state.behind)") }
-        if !state.hasUpstream && state.commitsSinceBase > 0 { parts.append("not pushed") }
-        if let pr = state.pr {
-            parts.append("pr #\(pr.number) \(pr.isDraft ? "draft" : pr.state.lowercased())")
+    private func icon(_ action: PrimaryAction) -> String {
+        switch action {
+        case .pull: return "arrow.down"
+        case .commit, .commitAndPush, .push: return "arrow.up"
+        case .createPR, .none: return "arrow.triangle.pull"
+        case .markReady: return "checkmark"
+        case .viewPR, .merged: return "arrow.up.right"
         }
-        if !state.hasRemote { parts.append("no remote") }
-        return parts.isEmpty ? "\(state.commitsSinceBase) commits since base" : parts.joined(separator: " · ")
     }
 }
 
-extension PrimaryAction {
-    /// Actions that change files or history in the worktree.
-    var touchesWorkTree: Bool {
-        switch self {
-        case .pull, .commit, .commitAndPush: return true
-        default: return false
+private struct FileRow: View {
+    let file: DiffFile
+    let selected: Bool
+    let open: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 8) {
+                Text(file.status.letter)
+                    .font(.mono(11, .semibold))
+                    .foregroundStyle(file.status.color)
+                    .frame(width: 12)
+                (Text(file.fileName).foregroundColor(Tk.ink)
+                    + Text(file.directory.isEmpty ? "" : "  " + file.directory.dropLast()).foregroundColor(Tk.inkFaint))
+                    .font(.sans(13))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 4)
+                if let a = file.additions, let d = file.deletions {
+                    Text("+\(a)").foregroundStyle(Tk.success)
+                    Text("−\(d)").foregroundStyle(Tk.danger)
+                } else if file.status == .untracked {
+                    Text("new").foregroundStyle(Tk.success)
+                } else {
+                    Text("bin").foregroundStyle(Tk.inkFaint)
+                }
+            }
+            .font(.mono(12))
+            .padding(.horizontal, 8)
+            .frame(height: 28)
+            .background(RoundedRectangle(cornerRadius: Tk.radiusMd).fill(selected || hovering ? Tk.bg300 : .clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+    }
+}
+
+/// The selected file's diff, as a card under the file list.
+private struct InlineDiff: View {
+    @EnvironmentObject private var store: AppStore
+    let workspace: Workspace
+    let file: DiffFile
+    @State private var lines: [DiffLine] = []
+    @State private var error: String?
+    /// The card's width, so row tints span it even when the code is shorter.
+    @State private var width: CGFloat = 0
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text(file.path).lineLimit(1).truncationMode(.head)
+                Spacer(minLength: 4)
+                Button { store.openDiff[workspace.id] = file } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                }
+                .buttonStyle(.tkIcon(24))
+                .help("Open wide")
+            }
+            .font(.mono(12, .medium))
+            .foregroundStyle(Tk.inkMuted)
+            .padding(.leading, 12)
+            .padding(.trailing, 4)
+            .frame(height: 32)
+            .background(Tk.bg100)
+            Hairline()
+            if let error {
+                Text(error).font(.mono(12)).foregroundStyle(Tk.danger).padding(12)
+            } else {
+                ScrollView(.horizontal) {
+                    DiffLines(lines: lines, compact: true)
+                        .padding(.vertical, 4)
+                        .frame(minWidth: width, alignment: .leading)
+                }
+            }
+        }
+        .background(Tk.bg000)
+        .background(GeometryReader { proxy in
+            Color.clear
+                .onAppear { width = proxy.size.width }
+                .onChange(of: proxy.size.width) { width = proxy.size.width }
+        })
+        .clipShape(RoundedRectangle(cornerRadius: Tk.radiusLg, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Tk.radiusLg, style: .continuous).strokeBorder(Tk.line, lineWidth: 1))
+        .task(id: "\(file.path)|\(file.additions ?? -1)|\(file.deletions ?? -1)") {
+            do {
+                let text = try await store.settings.git.diff(of: file, in: workspace.path, base: workspace.baseCommit)
+                lines = Git.parseDiff(text).filter { $0.kind != .header }
+                error = nil
+            } catch {
+                self.error = error.localizedDescription
+            }
         }
     }
 }
