@@ -21,6 +21,16 @@ so this project's Claude session is a bare `claude`, not kekkai.
   preferred). The diff panel compares against the commit recorded at creation.
 - **Default permission mode** is `bypassPermissions` (Conductor-like);
   configurable in settings.
+- **Primary action** (top-right of the window, head of the changes panel):
+  one button, the next step for the branch, picked by `PrimaryAction.decide`
+  in this order: pull (behind remote) → commit & push (dirty) → push (unpushed)
+  → create PR → ready for review (draft) → view PR. git and gh do the work
+  directly, never the chat agent, so it works in any permission mode; claude
+  (haiku, `--tools ""`) only writes the commit message and PR title/body. New
+  actions go in that enum. Fetch + `gh pr view` run every ~32s, local status
+  every 4s.
+- **Settings** is a page inside the main window (⌘, and the gear), not a
+  separate Settings window. The app is light-appearance only.
 - Design: the np.lol design system (`Theme.swift`, bundled fonts), amber accent.
 
 ## Code map (`PsyduckMac/Sources`)

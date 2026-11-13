@@ -12,7 +12,7 @@ private struct SavedState: Codable {
 @MainActor
 final class AppStore: ObservableObject {
     @Published private(set) var repos: [Repo] = []
-    @Published private(set) var workspaces: [Workspace] = []
+    @Published var workspaces: [Workspace] = []
     @Published var selection: UUID?
     @Published var errorMessage: String?
     /// Settings is a page in the main window, over the chat and changes panes.
@@ -24,6 +24,10 @@ final class AppStore: ObservableObject {
     @Published private(set) var streaming: [UUID: String] = [:]
 
     @Published private(set) var changes: [UUID: [DiffFile]] = [:]
+    /// Each workspace's branch against its remote and PR, for the header button.
+    @Published var branches: [UUID: BranchState] = [:]
+    /// Workspaces with a header action (commit, push, PR…) in flight.
+    @Published var acting: Set<UUID> = []
     /// The file open in the center pane's diff viewer, per workspace.
     @Published var openDiff: [UUID: DiffFile] = [:]
 

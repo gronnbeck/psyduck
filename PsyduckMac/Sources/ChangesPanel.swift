@@ -10,6 +10,8 @@ struct ChangesPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            PrimaryActionBar(workspace: workspace)
+            InkRule(vertical: false)
             HStack {
                 Text("changes").microLabel()
                 Text("\(files.count)").font(.mono(11, .medium)).foregroundStyle(Ink.ink3)
@@ -52,9 +54,13 @@ struct ChangesPanel: View {
         }
         .background(Ink.paper2)
         .task(id: workspace.id) {
-            // Catches edits made outside psyduck too, while the workspace is open.
+            // Catches edits made outside psyduck too, while the workspace is
+            // open. The remote and GitHub are asked every eighth round only.
+            var round = 0
             while !Task.isCancelled {
                 await store.refreshChanges(workspace.id)
+                await store.refreshBranch(workspace.id, network: round % 8 == 0)
+                round += 1
                 try? await Task.sleep(for: .seconds(4))
             }
         }
@@ -101,5 +107,77 @@ private struct FileRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// The top-right corner: the one next step for this branch — pull, commit &
+/// push, create a PR, ready it for review — chosen by `PrimaryAction.decide`.
+private struct PrimaryActionBar: View {
+    @EnvironmentObject private var store: AppStore
+    let workspace: Workspace
+
+    var body: some View {
+        let action = store.primaryAction(for: workspace.id)
+        let busy = store.acting.contains(workspace.id)
+        let running = store.isRunning(workspace.id)
+        let state = store.branches[workspace.id]
+
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(workspace.branch).font(.mono(11, .medium)).lineLimit(1).truncationMode(.middle)
+                Text(summary(state)).font(.mono(10)).foregroundStyle(Ink.ink3).lineLimit(1)
+            }
+            Spacer(minLength: 6)
+            if busy { ProgressView().controlSize(.small) }
+            Button {
+                store.perform(action, on: workspace.id)
+            } label: {
+                HStack(spacing: 4) {
+                    Text(action.title)
+                    if case .viewPR = action { Image(systemName: "arrow.up.right") }
+                    if case .merged = action { Image(systemName: "arrow.up.right") }
+                }
+            }
+            .buttonStyle(InkButtonStyle(fill: fill(action), small: true))
+            // Committing under claude's feet would race its edits.
+            .disabled(action == .none || busy || (running && action.touchesWorkTree))
+            .help(running && action.touchesWorkTree ? "wait for claude to finish" : action.help)
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 12)
+        .padding(.bottom, 10)
+    }
+
+    private func fill(_ action: PrimaryAction) -> Color {
+        switch action {
+        case .createPR, .commitAndPush, .commit, .push: return Ink.accent
+        case .pull: return Ink.amber
+        case .markReady: return Ink.acid
+        case .viewPR, .merged, .none: return Ink.paper
+        }
+    }
+
+    private func summary(_ state: BranchState?) -> String {
+        guard let state else { return "checking…" }
+        var parts: [String] = []
+        if state.dirty { parts.append("uncommitted") }
+        if state.ahead > 0 { parts.append("↑\(state.ahead)") }
+        if state.behind > 0 { parts.append("↓\(state.behind)") }
+        if !state.hasUpstream && state.commitsSinceBase > 0 { parts.append("not pushed") }
+        if let pr = state.pr {
+            parts.append("pr #\(pr.number) \(pr.isDraft ? "draft" : pr.state.lowercased())")
+        }
+        if !state.hasRemote { parts.append("no remote") }
+        return parts.isEmpty ? "\(state.commitsSinceBase) commits since base" : parts.joined(separator: " · ")
+    }
+}
+
+extension PrimaryAction {
+    /// Actions that change files or history in the worktree.
+    var touchesWorkTree: Bool {
+        switch self {
+        case .pull, .commit, .commitAndPush: return true
+        default: return false
+        }
     }
 }

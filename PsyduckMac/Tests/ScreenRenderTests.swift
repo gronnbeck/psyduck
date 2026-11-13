@@ -21,6 +21,7 @@ final class ScreenRenderTests: XCTestCase {
         let updater = UpdaterModel()
         let workspace = try XCTUnwrap(store.selectedWorkspace)
         await store.refreshChanges(workspace.id)
+        await store.refreshBranch(workspace.id, network: false)
 
         func render(_ name: String, _ view: some View, width: CGFloat = 1280, height: CGFloat = 800) async throws {
             let root = view.environmentObject(settings).environmentObject(store).environmentObject(updater)

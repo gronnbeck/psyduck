@@ -75,10 +75,14 @@ enum Shell {
     }
 
     /// Runs to completion and collects output.
-    static func run(_ path: String, _ arguments: [String], directory: URL? = nil) async throws -> CommandResult {
-        var out = Data()
-        let result = try await stream(path, arguments, directory: directory) { out.append($0); out.append(0x0A) }
-        return CommandResult(status: result.status, stdout: String(decoding: out, as: UTF8.self), stderr: result.stderr)
+    static func run(_ path: String, _ arguments: [String], directory: URL? = nil,
+                    input: Data? = nil) async throws -> CommandResult {
+        let out = DataBox()
+        let result = try await stream(path, arguments, directory: directory, input: input) {
+            out.append($0)
+            out.append(Data([0x0A]))
+        }
+        return CommandResult(status: result.status, stdout: String(decoding: out.data, as: UTF8.self), stderr: result.stderr)
     }
 
     /// Runs to completion, handing each line of stdout over as it arrives —

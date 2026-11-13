@@ -222,3 +222,150 @@ final class LiveClaudeTests: XCTestCase {
         XCTAssertTrue(last.contains("duck.txt"))
     }
 }
+
+final class PrimaryActionTests: XCTestCase {
+    private let pr = PullRequest(number: 7, url: "https://github.com/o/r/pull/7", state: "OPEN", isDraft: false)
+
+    func testOrder() {
+        var s = BranchState(dirty: false, hasRemote: true)
+        XCTAssertEqual(PrimaryAction.decide(s), .none)
+
+        s.dirty = true
+        XCTAssertEqual(PrimaryAction.decide(s), .commitAndPush)
+        s.behind = 2
+        XCTAssertEqual(PrimaryAction.decide(s), .pull, "catch up with the remote first")
+        s.behind = 0; s.dirty = false
+
+        s.commitsSinceBase = 1
+        XCTAssertEqual(PrimaryAction.decide(s), .push, "never pushed")
+        s.hasUpstream = true
+        XCTAssertEqual(PrimaryAction.decide(s), .createPR)
+        s.ahead = 1
+        XCTAssertEqual(PrimaryAction.decide(s), .push)
+        s.ahead = 0
+
+        var draft = pr; draft.isDraft = true
+        s.pr = draft
+        XCTAssertEqual(PrimaryAction.decide(s), .markReady(draft))
+        s.pr = pr
+        XCTAssertEqual(PrimaryAction.decide(s), .viewPR(pr))
+        var merged = pr; merged.state = "MERGED"
+        s.pr = merged
+        XCTAssertEqual(PrimaryAction.decide(s), .merged(merged))
+    }
+
+    func testNoRemoteOnlyCommits() {
+        var s = BranchState(dirty: true, hasRemote: false)
+        XCTAssertEqual(PrimaryAction.decide(s), .commit)
+        s.dirty = false; s.commitsSinceBase = 3
+        XCTAssertEqual(PrimaryAction.decide(s), .none)
+    }
+
+    /// Real git: a bare "origin", a worktree, then commit → push → behind.
+    func testBranchStateAgainstARealRemote() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("psyduck-branch-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let git = Git(gitPath: "/usr/bin/git")
+        let origin = root.appendingPathComponent("origin.git").path
+        let repo = root.appendingPathComponent("repo").path
+        try FileManager.default.createDirectory(atPath: origin, withIntermediateDirectories: true)
+        try await git.output(["init", "--bare", "-b", "main"], in: origin)
+        try await git.output(["clone", origin, repo], in: root.path)
+        for args in [["config", "user.email", "t@example.com"], ["config", "user.name", "t"]] {
+            try await git.output(args, in: repo)
+        }
+        try "a\n".write(toFile: repo + "/a.txt", atomically: true, encoding: .utf8)
+        try await git.output(["add", "."], in: repo)
+        try await git.output(["commit", "-m", "init"], in: repo)
+        try await git.output(["push", "-u", "origin", "main"], in: repo)
+
+        let dir = root.appendingPathComponent("ws").path
+        let base = try await git.addWorktree(repo: repo, directory: dir, branch: "psyduck/teal", baseRef: "main")
+        func state() async -> BranchState {
+            await git.branchState(worktree: dir, base: base, branch: "psyduck/teal", gh: nil, network: true, previousPR: nil)
+        }
+
+        try "b\n".write(toFile: dir + "/b.txt", atomically: true, encoding: .utf8)
+        var s = await state()
+        XCTAssertTrue(s.dirty)
+        XCTAssertTrue(s.hasRemote)
+        XCTAssertEqual(PrimaryAction.decide(s), .commitAndPush)
+
+        try await git.output(["add", "-A"], in: dir)
+        try await git.output(["commit", "-m", "b"], in: dir)
+        s = await state()
+        XCTAssertEqual(PrimaryAction.decide(s), .push)
+
+        try await git.output(["push", "-u", "origin", "HEAD"], in: dir)
+        s = await state()
+        XCTAssertEqual(s.ahead, 0)
+        XCTAssertEqual(PrimaryAction.decide(s), .createPR)
+
+        // Someone else pushes to the branch.
+        let other = root.appendingPathComponent("other").path
+        try await git.output(["clone", "-b", "psyduck/teal", origin, other], in: root.path)
+        for args in [["config", "user.email", "o@example.com"], ["config", "user.name", "o"]] {
+            try await git.output(args, in: other)
+        }
+        try "c\n".write(toFile: other + "/c.txt", atomically: true, encoding: .utf8)
+        try await git.output(["add", "."], in: other)
+        try await git.output(["commit", "-m", "c"], in: other)
+        try await git.output(["push"], in: other)
+
+        s = await state()
+        XCTAssertEqual(s.behind, 1)
+        XCTAssertEqual(PrimaryAction.decide(s), .pull)
+        try await git.output(["pull", "--rebase", "--autostash", "origin", "psyduck/teal"], in: dir)
+        s = await state()
+        XCTAssertEqual(s.behind, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dir + "/c.txt"))
+    }
+}
+
+extension LiveClaudeTests {
+    /// The header button's commit & push, with claude writing the message.
+    @MainActor
+    func testCommitAndPushWritesAMessage() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["PSYDUCK_LIVE_CLAUDE"] == "1", "live test")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("psyduck-live-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let git = Git(gitPath: "/usr/bin/git")
+        let origin = root.appendingPathComponent("origin.git").path
+        let repo = root.appendingPathComponent("repo").path
+        try FileManager.default.createDirectory(atPath: origin, withIntermediateDirectories: true)
+        try await git.output(["init", "--bare", "-b", "main"], in: origin)
+        try await git.output(["clone", origin, repo], in: root.path)
+        for args in [["config", "user.email", "t@example.com"], ["config", "user.name", "t"]] {
+            try await git.output(args, in: repo)
+        }
+        try "hello\n".write(toFile: repo + "/README.md", atomically: true, encoding: .utf8)
+        try await git.output(["add", "."], in: repo)
+        try await git.output(["commit", "-m", "init"], in: repo)
+        try await git.output(["push", "-u", "origin", "main"], in: repo)
+
+        let settings = AppSettings(defaults: UserDefaults(suiteName: "psyduck-live-\(UUID().uuidString)")!)
+        settings.gitPath = "/usr/bin/git"
+        settings.workspacesRoot = root.appendingPathComponent("ws").path
+        if settings.claudePath.isEmpty { settings.claudePath = Shell.home + "/.local/bin/claude" }
+        let store = AppStore(settings: settings, stateURL: nil)
+        await store.addRepo(at: repo)
+        await store.newWorkspace(in: store.repos[0])
+        let workspace = try XCTUnwrap(store.selectedWorkspace)
+
+        try "fn add(a, b) = a + b\n".write(toFile: workspace.path + "/math.txt", atomically: true, encoding: .utf8)
+        await store.refreshBranch(workspace.id, network: true)
+        XCTAssertEqual(store.primaryAction(for: workspace.id), .commitAndPush)
+
+        store.perform(.commitAndPush, on: workspace.id)
+        try await Task.sleep(for: .milliseconds(200))
+        for _ in 0..<120 where store.acting.contains(workspace.id) { try await Task.sleep(for: .milliseconds(500)) }
+
+        let message = try await git.output(["log", "-1", "--format=%B"], in: workspace.path)
+        print("COMMIT MESSAGE:", message)
+        print("NOTES:", store.selectedWorkspace?.items.map(\.text) ?? [])
+        XCTAssertFalse(message.hasPrefix("chore: changes from"), "fell back instead of using claude")
+        let remote = try await git.output(["ls-remote", "origin", workspace.branch], in: repo)
+        XCTAssertFalse(remote.isEmpty, "branch wasn't pushed")
+        XCTAssertEqual(store.primaryAction(for: workspace.id), .createPR)
+    }
+}
