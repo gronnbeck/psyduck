@@ -118,9 +118,18 @@ private struct WorkspaceRow: View {
                     Text(workspace.branch).font(.mono(12)).foregroundStyle(Tk.inkMuted).lineLimit(1)
                 }
                 Spacer(minLength: 4)
-                HStack(spacing: 6) {
-                    Circle().fill(running ? Tk.info : Tk.success).frame(width: 8, height: 8)
-                    Text(running ? "Running" : "Ready").font(.sans(12)).foregroundStyle(Tk.inkMuted)
+                if hovering {
+                    Button { Task { await store.archive(workspace) } } label: {
+                        Image(systemName: "archivebox")
+                    }
+                    .buttonStyle(.tkIcon(24))
+                    .help("Archive workspace")
+                    .accessibilityLabel("Archive \(workspace.name)")
+                } else {
+                    HStack(spacing: 6) {
+                        Circle().fill(running ? Tk.info : Tk.success).frame(width: 8, height: 8)
+                        Text(running ? "Running" : "Ready").font(.sans(12)).foregroundStyle(Tk.inkMuted)
+                    }
                 }
             }
             .padding(.horizontal, 12)
@@ -154,6 +163,6 @@ struct WorkspaceMenuItems: View {
             NSPasteboard.general.setString(workspace.path, forType: .string)
         }
         Divider()
-        Button("Archive (remove worktree, keep branch)") { Task { await store.archive(workspace) } }
+        Button("Archive") { Task { await store.archive(workspace) } }
     }
 }

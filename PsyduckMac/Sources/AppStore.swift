@@ -168,22 +168,53 @@ final class AppStore: ObservableObject {
         }
     }
 
-    /// Removes the worktree and forgets the workspace. The branch is kept.
+    /// Soft-deletes a workspace: stops claude, saves any uncommitted work to
+    /// a ref, removes the worktree and moves the record to `archive.json`,
+    /// which isn't loaded at launch. The branch is kept.
     func archive(_ workspace: Workspace) async {
         stop(workspace.id)
+        var archived = workspace
+        archived.archivedAt = Date()
         if let repo = repo(for: workspace), FileManager.default.fileExists(atPath: workspace.path) {
             do {
-                try await settings.git.removeWorktree(repo: repo.path, directory: workspace.path)
+                let git = settings.git
+                archived.archivedWork = try await git.snapshotWork(
+                    in: workspace.path, ref: "refs/psyduck/archive/\(workspace.id.uuidString)")
+                try await git.removeWorktree(repo: repo.path, directory: workspace.path)
             } catch {
-                errorMessage = "couldn't remove the worktree: \(error.localizedDescription)"
+                errorMessage = "couldn't archive the workspace: \(error.localizedDescription)"
                 return
             }
         }
+        appendToArchive(archived)
         workspaces.removeAll { $0.id == workspace.id }
-        changes[workspace.id] = nil
-        openDiff[workspace.id] = nil
+        let id = workspace.id
+        changes[id] = nil
+        branches[id] = nil
+        openDiff[id] = nil
+        selectedFile[id] = nil
+        queued[id] = nil
+        streaming[id] = nil
         if selection == workspace.id { selection = workspaces.first?.id }
         save()
+    }
+
+    /// Archived workspaces, next to `state.json`. Read and written only when
+    /// archiving (and, later, restoring), so they cost nothing at runtime.
+    var archiveURL: URL? { stateURL?.deletingLastPathComponent().appendingPathComponent("archive.json") }
+
+    func loadArchive() -> [Workspace] {
+        guard let archiveURL, let data = try? Data(contentsOf: archiveURL) else { return [] }
+        return (try? JSONDecoder().decode([Workspace].self, from: data)) ?? []
+    }
+
+    private func appendToArchive(_ workspace: Workspace) {
+        guard let archiveURL else { return }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? encoder.encode(loadArchive() + [workspace]) {
+            try? data.write(to: archiveURL, options: .atomic)
+        }
     }
 
     // MARK: - Chat

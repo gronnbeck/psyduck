@@ -166,9 +166,28 @@ final class WorktreeTests: XCTestCase {
         let reloaded = AppStore(settings: settings, stateURL: root.appendingPathComponent("state.json"))
         XCTAssertEqual(reloaded.workspaces.map(\.id), [workspace.id])
 
+        // Uncommitted work survives archiving, on a ref, without moving the branch.
+        try "wip\n".write(toFile: workspace.path + "/wip.txt", atomically: true, encoding: .utf8)
+        let git = Git(gitPath: "/usr/bin/git")
+        let head = try await git.output(["rev-parse", workspace.branch], in: repo)
+
         await store.archive(workspace)
+        XCTAssertNil(store.errorMessage)
         XCTAssertTrue(store.workspaces.isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: workspace.path))
+        let branchHead = try await git.output(["rev-parse", workspace.branch], in: repo)
+        XCTAssertEqual(branchHead, head)
+
+        let archived = try XCTUnwrap(store.loadArchive().first)
+        XCTAssertEqual(archived.id, workspace.id)
+        XCTAssertNotNil(archived.archivedAt)
+        let work = try XCTUnwrap(archived.archivedWork)
+        let saved = try await git.output(["show", "\(work):wip.txt"], in: repo)
+        XCTAssertEqual(saved, "wip")
+
+        // Archived workspaces aren't loaded at launch.
+        let relaunched = AppStore(settings: settings, stateURL: root.appendingPathComponent("state.json"))
+        XCTAssertTrue(relaunched.workspaces.isEmpty)
     }
 }
 

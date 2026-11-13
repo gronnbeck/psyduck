@@ -29,6 +29,10 @@ struct Workspace: Codable, Identifiable, Hashable {
     /// What every turn in this workspace has cost so far.
     var totalCost: Double?
     var createdAt = Date()
+    /// Set once archived: the worktree is gone, the record lives in `archive.json`.
+    var archivedAt: Date?
+    /// Uncommitted work at archive time, as a commit under `refs/psyduck/archive/`.
+    var archivedWork: String?
     var items: [ChatItem] = []
 }
 
