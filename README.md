@@ -59,7 +59,7 @@ Local builds are ad-hoc signed and have no update feed, so Sparkle stays off.
 
 ## License
 
-MIT. See `LICENSE`. The bundled fonts (Bricolage Grotesque, JetBrains Mono,
-Boldonse) are under the SIL Open Font License; see `PsyduckMac/Fonts/`.
+MIT. See `LICENSE`. The bundled fonts (Inter, Bricolage Grotesque, JetBrains Mono)
+are under the SIL Open Font License; see `PsyduckMac/Fonts/`.
 
 Not affiliated with Conductor, Anthropic, or Pokémon.
