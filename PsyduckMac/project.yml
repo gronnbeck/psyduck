@@ -38,11 +38,11 @@ targets:
         # which the app reads as "updates not configured" and disables the
         # check — the right behaviour for a local dev build.
         SUFeedURL: ""
-        # psyduck's own EdDSA public key. The private half lives only at
-        # op://nplol/psyduck/sparkle-private-key and in the login keychain of
-        # the gronnbeck Mac (account `psyduck`). Installed copies trust only
-        # this key's signature, so losing the private key strands them.
-        SUPublicEDKey: "8PEYnR8e9WIGCUUADEYCUbiMg74qJQMLd4nV22tmRSE="
+        # psyduck's own EdDSA public key. The private half lives at
+        # op://nplol/psyduck/sparkle-private-key (the 1Password copy is the
+        # source of truth). Installed copies trust only this key's signature,
+        # so losing the private key strands them.
+        SUPublicEDKey: "SsuEaOgM+uD8ubm+P+NapxQzxQQ8K5hkrD236qUBhGU="
         SUEnableAutomaticChecks: true
         SUScheduledCheckInterval: 86400
     settings:

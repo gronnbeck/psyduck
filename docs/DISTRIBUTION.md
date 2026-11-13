@@ -34,11 +34,13 @@ pushes to `main` and manual runs, never on pull requests.
 | Sparkle EdDSA key | `op://nplol/psyduck/sparkle-private-key` | **No, psyduck's own** |
 | 1Password service account | GitHub secret `OP_SERVICE_ACCOUNT_TOKEN` | Same token as the other repos, set per repo |
 
-The Sparkle key pair was generated on the gronnbeck Mac into the login
-keychain under account `psyduck`. The public half is `SUPublicEDKey` in
-`PsyduckMac/project.yml` (`8PEYnR8e9WIGCUUADEYCUbiMg74qJQMLd4nV22tmRSE=`).
-The private half is unrecoverable if lost: losing both the keychain copy and
-the 1Password copy strands every installed copy on its current version.
+The private Sparkle key lives at `op://nplol/psyduck/sparkle-private-key`, and
+that copy is the source of truth. Its public half is `SUPublicEDKey` in
+`PsyduckMac/project.yml` (`SsuEaOgM+uD8ubm+P+NapxQzxQQ8K5hkrD236qUBhGU=`). The
+key under keychain account `psyduck` on the gronnbeck Mac is a different,
+unused key from the first setup attempt. Don't export it into 1Password. The
+private key is unrecoverable if lost: losing it strands every installed copy
+on its current version.
 
 ## First release checklist
 
