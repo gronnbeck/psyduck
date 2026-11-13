@@ -1,0 +1,49 @@
+name: macOS
+
+# Builds and tests the Mac app on every PR and push. Runs on GitHub-hosted
+# runners and touches no secrets: this repo is public, so fork PRs must never
+# reach a self-hosted machine or a 1Password token.
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "PsyduckMac/**"
+      - ".github/workflows/macos.yml"
+  pull_request:
+    paths:
+      - "PsyduckMac/**"
+      - ".github/workflows/macos.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: psyduck-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-26
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: PsyduckMac
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install xcodegen
+        run: command -v xcodegen >/dev/null || brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build and test
+        run: |
+          set -e
+          git config --global user.email "ci@example.com"
+          git config --global user.name "ci"
+          xcodebuild test -project Psyduck.xcodeproj -scheme Psyduck \
+            -configuration Debug -destination 'platform=macOS' \
+            -derivedDataPath build

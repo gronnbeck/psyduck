@@ -1,0 +1,403 @@
+name: Release macOS app (edge)
+
+# Produces a signed, notarized, stapled .app and publishes it to the shared
+# nplol dist bucket along with a Sparkle appcast, so installed copies update
+# themselves.
+#
+# GitHub-hosted, not the self-hosted runner tsukue uses: this repo is public,
+# and a public repo must never be able to schedule work on a personal Mac.
+# Only pushes to main and manual runs reach this workflow, so the 1Password
+# token is never exposed to a pull request.
+#
+# Only the edge channel exists today: every push to main is a build, with no
+# more testing than the commit it came from. The layout deliberately matches
+# jidouanki's, so adding stable later means publishing to the unprefixed
+# `psyduck/` paths beside `psyduck/edge/` rather than reorganising anything.
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "PsyduckMac/**"
+      - ".github/workflows/macos-release.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  # A burst of pushes should produce one build, not one each.
+  group: psyduck-macos-release
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      CHANNEL: edge
+      # Edge builds are cheap and frequent; three days is enough to bisect a
+      # regression without the bucket growing without bound.
+      RETENTION_DAYS: 3
+      DIST_ENDPOINT: https://hel1.your-objectstorage.com
+    defaults:
+      run:
+        working-directory: PsyduckMac
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install xcodegen
+        run: command -v xcodegen >/dev/null || brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Work out this build's version
+        run: |
+          set -e
+          # Sparkle decides "is this newer?" by comparing CFBundleVersion, so it
+          # has to increase monotonically across builds. The run number does,
+          # where a commit SHA or a date wouldn't. The marketing version is the
+          # one in project.yml, bumped by hand per release, and only ever shown
+          # to a human.
+          echo "APP_BUILD=${{ github.run_number }}" >> "$GITHUB_ENV"
+          VERSION=$(sed -nE 's/^ *MARKETING_VERSION: "(.*)"/\1/p' project.yml)
+          if [ -z "$VERSION" ]; then
+            echo "::error::no MARKETING_VERSION in PsyduckMac/project.yml"
+            exit 1
+          fi
+          echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          set -e
+          xcodebuild -project Psyduck.xcodeproj -scheme Psyduck \
+            -configuration Release -derivedDataPath build \
+            MARKETING_VERSION="$APP_VERSION" \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            build
+
+      # Reuses the derived data from the build above, so this compiles only the
+      # test target. The worktree tests make commits, which need an identity.
+      - name: Test
+        run: |
+          set -e
+          git config --global user.email "ci@example.com"
+          git config --global user.name "ci"
+          xcodebuild test -project Psyduck.xcodeproj -scheme Psyduck \
+            -configuration Debug -destination 'platform=macOS' \
+            -derivedDataPath build
+
+      - name: Load signing secrets from 1Password
+        uses: 1password/load-secrets-action@v2
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          # Deliberately jidouanki's item. A Developer ID Application certificate
+          # is issued to the Apple Developer *team*, not to an app, and one cert
+          # signs everything the team distributes outside the App Store. Copying
+          # it into a second 1Password item would mean two things to rotate.
+          P12_BASE64: op://nplol/jidouanki/developer-id-cert-p12-base64
+          P12_PASSWORD: op://nplol/jidouanki/developer cert p12 pass
+          # Also team-wide, and shared with the iOS TestFlight pipelines —
+          # notarytool accepts the same App Store Connect key type Fastlane uses.
+          ASC_KEY_ID: op://nplol/app-store-connect/key-id
+          ASC_ISSUER_ID: op://nplol/app-store-connect/issuer-id
+          ASC_KEY_CONTENT: op://nplol/app-store-connect/key-content
+          # The shared nplol distributables bucket. Its credentials live on the
+          # bucket's own 1Password item rather than being copied into each app's,
+          # so there is one place to rotate them. Every app's objects live under
+          # its own key prefix, never the bucket root.
+          DIST_BUCKET: op://nplol/nplol-dist/hetzner-bucket-name
+          DIST_ACCESS_KEY: op://nplol/nplol-dist/hetzner-s3-access-key
+          DIST_SECRET_KEY: op://nplol/nplol-dist/hetzner-s3-secret-key
+          # psyduck's own Sparkle EdDSA key, not jidouanki's — unrelated to the
+          # Developer ID certificate above. Installed copies trust only this
+          # key's signature, so losing it permanently breaks their update path.
+          SPARKLE_PRIVATE_KEY: op://nplol/psyduck/sparkle-private-key
+
+      # Installed copies accept an update only if it verifies against the
+      # SUPublicEDKey they were built with. A private key in 1Password that
+      # doesn't pair with it would publish a feed every installed app rejects,
+      # so derive the public half and compare before building anything on it.
+      # Public keys aren't secret, so the expected one is printed on mismatch.
+      - name: Check the Sparkle key pair matches the app
+        working-directory: PsyduckMac/build/Build/Products/Release
+        run: |
+          set -e
+          # The system LibreSSL has no Ed25519; Homebrew's OpenSSL does.
+          OPENSSL="$(brew --prefix openssl@3 2>/dev/null)/bin/openssl"
+          [ -x "$OPENSSL" ] || { brew install openssl@3; OPENSSL="$(brew --prefix openssl@3)/bin/openssl"; }
+          BUILT=$(/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" Psyduck.app/Contents/Info.plist)
+          # The exported key is the base64 Ed25519 seed; wrap it in a PKCS#8
+          # header so openssl can derive the public half.
+          DERIVED=$( { printf '\x30\x2e\x02\x01\x00\x30\x05\x06\x03\x2b\x65\x70\x04\x22\x04\x20'
+                       printf '%s' "$SPARKLE_PRIVATE_KEY" | base64 --decode | head -c 32; } \
+            | "$OPENSSL" pkey -inform DER -pubout -outform DER | tail -c 32 | base64)
+          if [ "$DERIVED" != "$BUILT" ]; then
+            echo "::error::SUPublicEDKey is '$BUILT' but the 1Password key pairs with '$DERIVED' — put that in PsyduckMac/project.yml"
+            exit 1
+          fi
+
+      - name: Import signing certificate into a temporary keychain
+        env:
+          KEYCHAIN_PASSWORD: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -e
+          security delete-keychain psyduck-build.keychain 2>/dev/null || true
+          echo "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" psyduck-build.keychain
+          security set-keychain-settings -lut 3600 psyduck-build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" psyduck-build.keychain
+          security import "$RUNNER_TEMP/cert.p12" -k psyduck-build.keychain \
+            -P "$P12_PASSWORD" -T /usr/bin/codesign
+          EXISTING=$(security list-keychains -d user | sed 's/"//g')
+          security list-keychains -d user -s psyduck-build.keychain $EXISTING
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" psyduck-build.keychain
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+      - name: Stamp the channel's identity into the bundle
+        working-directory: PsyduckMac/build/Build/Products/Release
+        run: |
+          set -e
+          # Must happen before signing: editing Info.plist invalidates any
+          # existing signature.
+          BASE="https://$DIST_BUCKET.hel1.your-objectstorage.com/psyduck"
+
+          # Worked out as shell variables and exported at the end. $GITHUB_ENV
+          # only reaches *later* steps, so a value written there and read in the
+          # same step is empty.
+          #
+          # The appcast points at an immutable, run-numbered object so a feed can
+          # never advertise bytes that have since been replaced. The landing page
+          # links to the rolling copy instead, so that URL never changes.
+          ZIP_KEY="psyduck/$CHANNEL/psyduck-${{ github.run_number }}.zip"
+          ZIP_URL="$BASE/$CHANNEL/psyduck-${{ github.run_number }}.zip"
+          ROLLING_KEY="psyduck/$CHANNEL/psyduck-edge-latest.zip"
+          FEED_KEY="psyduck/$CHANNEL/appcast.xml"
+          FEED_URL="$BASE/$CHANNEL/appcast.xml"
+          {
+            echo "ZIP_KEY=$ZIP_KEY"
+            echo "ZIP_URL=$ZIP_URL"
+            echo "ROLLING_KEY=$ROLLING_KEY"
+            echo "ROLLING_URL=$BASE/$CHANNEL/psyduck-edge-latest.zip"
+            echo "FEED_KEY=$FEED_KEY"
+            echo "FEED_URL=$FEED_URL"
+            echo "PRUNE_PREFIX=psyduck/$CHANNEL/"
+          } >> "$GITHUB_ENV"
+
+          PLIST=Psyduck.app/Contents/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :SUFeedURL $FEED_URL" "$PLIST"
+          # Read back by Settings, so the app can say which build it is.
+          /usr/libexec/PlistBuddy -c "Add :PsyduckChannel string $CHANNEL" "$PLIST" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Set :PsyduckChannel $CHANNEL" "$PLIST"
+
+          # Edge installs *beside* a future stable rather than over it: its own
+          # bundle identifier, so macOS treats them as different apps with their
+          # own preferences and Sparkle can never update one into the other.
+          /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier lol.np.psyduck.$CHANNEL" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleName Psyduck ($CHANNEL)" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Psyduck ($CHANNEL)" "$PLIST" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string Psyduck ($CHANNEL)" "$PLIST"
+
+          # Renamed before signing, so the signature covers the bundle as it
+          # ships. Two apps can only sit in /Applications together if their
+          # bundle names differ — the display name alone isn't enough.
+          mv Psyduck.app "Psyduck ($CHANNEL).app"
+          echo "APP_BUNDLE=Psyduck ($CHANNEL).app" >> "$GITHUB_ENV"
+
+          # An app that can't update itself isn't obviously broken from the
+          # outside — it just never offers anything again — so refuse to ship
+          # one rather than leaving it to be noticed.
+          STAMPED="$(/usr/libexec/PlistBuddy -c "Print :SUFeedURL" "Psyduck ($CHANNEL).app/Contents/Info.plist")"
+          if [ "$STAMPED" != "$FEED_URL" ]; then
+            echo "::error::SUFeedURL is '$STAMPED', expected '$FEED_URL'"
+            exit 1
+          fi
+
+      - name: Sign with Developer ID and hardened runtime
+        working-directory: PsyduckMac/build/Build/Products/Release
+        run: |
+          set -e
+          APP="$APP_BUNDLE"
+          IDENTITY=$(security find-identity -v -p codesigning psyduck-build.keychain \
+            | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)"/\1/')
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::No Developer ID Application identity in psyduck-build.keychain"
+            exit 1
+          fi
+          echo "Signing with: $IDENTITY"
+
+          # Sparkle isn't a loose Mach-O: it ships two XPC services, a helper
+          # app and the Autoupdate tool, each a real bundle. Signing only the
+          # executable inside one leaves its _CodeSignature sealed against
+          # Sparkle's own distribution signature — the two disagree and
+          # notarization rejects the result. Sign them as bundles, innermost
+          # first, then the framework, then the app.
+          SPARKLE="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
+          for nested in \
+            "$SPARKLE/XPCServices/Downloader.xpc" \
+            "$SPARKLE/XPCServices/Installer.xpc" \
+            "$SPARKLE/Autoupdate" \
+            "$SPARKLE/Updater.app"; do
+            codesign --force --options runtime --timestamp --sign "$IDENTITY" "$nested"
+          done
+          codesign --force --options runtime --timestamp --sign "$IDENTITY" \
+            "$APP/Contents/Frameworks/Sparkle.framework"
+
+          codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+
+      - name: Notarize and staple
+        working-directory: PsyduckMac/build/Build/Products/Release
+        run: |
+          set -e
+          echo "$ASC_KEY_CONTENT" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+          ditto -c -k --keepParent "$APP_BUNDLE" "$RUNNER_TEMP/notarize.zip"
+
+          # `--wait` exits 0 even when Apple rejects the submission (status:
+          # Invalid) — only network/auth failures are non-zero — so the real
+          # pass/fail signal is the printed status, not the exit code. On
+          # anything but Accepted, fetch the detailed log before failing, so a
+          # rejection is diagnosable from this job's output alone.
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --key "$RUNNER_TEMP/AuthKey.p8" --key-id "$ASC_KEY_ID" \
+            --issuer "$ASC_ISSUER_ID" --wait | tee "$RUNNER_TEMP/notarize.log"
+
+          if ! grep -q "status: Accepted" "$RUNNER_TEMP/notarize.log"; then
+            SUBMISSION_ID=$(grep -m1 "id:" "$RUNNER_TEMP/notarize.log" | awk '{print $2}')
+            echo "::error::Notarization not accepted (submission $SUBMISSION_ID) — log follows"
+            xcrun notarytool log "$SUBMISSION_ID" --key "$RUNNER_TEMP/AuthKey.p8" \
+              --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" || true
+            rm -f "$RUNNER_TEMP/notarize.zip" "$RUNNER_TEMP/AuthKey.p8"
+            exit 1
+          fi
+
+          xcrun stapler staple "$APP_BUNDLE"
+          rm -f "$RUNNER_TEMP/notarize.zip" "$RUNNER_TEMP/AuthKey.p8"
+
+      - name: Zip and sign the appcast
+        working-directory: PsyduckMac/build/Build/Products/Release
+        run: |
+          set -e
+          ditto -c -k --sequesterRsrc --keepParent "$APP_BUNDLE" psyduck.zip
+
+          curl -sL https://github.com/sparkle-project/Sparkle/releases/download/2.9.5/Sparkle-2.9.5.tar.xz \
+            | tar -xJ bin/sign_update
+
+          # Prints `sparkle:edSignature="..." length="..."` — exactly the
+          # enclosure attributes, so it is substituted whole rather than parsed
+          # apart. `--ed-key-file -` reads from stdin, so the key never lands on
+          # disk or in the process table.
+          ATTRS=$(echo "$SPARKLE_PRIVATE_KEY" | ./bin/sign_update psyduck.zip --ed-key-file -)
+
+          # load-secrets-action resolves a *present but empty* field to an empty
+          # string without complaining (a missing field fails the step outright).
+          # An empty key would sail through to a published appcast that every
+          # installed app rejects, so make its absence a build failure here
+          # rather than a user-facing one later.
+          SIG=$(printf '%s' "$ATTRS" | sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p')
+          if [ -z "$SIG" ]; then
+            echo "::error::sign_update produced no EdDSA signature — is sparkle-private-key set?"
+            exit 1
+          fi
+
+          cat > appcast.xml <<XML
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <channel>
+              <title>Psyduck ($CHANNEL)</title>
+              <link>$FEED_URL</link>
+              <description>Automatic updates for the psyduck macOS client ($CHANNEL channel).</description>
+              <language>en</language>
+              <item>
+                <title>Version $APP_VERSION ($CHANNEL)</title>
+                <pubDate>$(date -u "+%a, %d %b %Y %H:%M:%S +0000")</pubDate>
+                <sparkle:version>$APP_BUILD</sparkle:version>
+                <sparkle:shortVersionString>$APP_VERSION</sparkle:shortVersionString>
+                <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+                <description><![CDATA[$CHANNEL build from $(git rev-parse --short HEAD) on $(date -u +%Y-%m-%d).]]></description>
+                <enclosure url="$ZIP_URL" $ATTRS type="application/octet-stream"/>
+              </item>
+            </channel>
+          </rss>
+          XML
+
+          xmllint --noout appcast.xml
+
+      - name: Clean up temporary keychain
+        if: always()
+        run: security delete-keychain psyduck-build.keychain 2>/dev/null || true
+
+      - name: Upload to the dist bucket
+        working-directory: PsyduckMac/build/Build/Products/Release
+        run: |
+          set -e
+          command -v aws >/dev/null 2>&1 || brew install awscli
+
+          # Force a single PUT instead of awscli's default multipart-above-8MB
+          # behaviour — boto3's multipart completion breaks against Hetzner's
+          # response format part-way through the upload. S3 allows single-PUT
+          # objects up to 5GB, far above this build.
+          aws configure set default.s3.multipart_threshold 1GB
+          export AWS_ACCESS_KEY_ID="$DIST_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$DIST_SECRET_KEY"
+          S3="aws s3 --endpoint-url $DIST_ENDPOINT"
+
+          # Immutable, run-numbered object: what the appcast advertises.
+          $S3 cp psyduck.zip "s3://$DIST_BUCKET/$ZIP_KEY"
+          # Rolling copy at a URL that never changes: what the landing page links to.
+          $S3 cp psyduck.zip "s3://$DIST_BUCKET/$ROLLING_KEY"
+
+          # Uploaded after the zip, never before: the appcast advertises a
+          # version, so publishing it first would point running apps at an
+          # archive that isn't there yet.
+          $S3 cp appcast.xml "s3://$DIST_BUCKET/$FEED_KEY" --content-type application/xml
+
+      # Done here rather than with a bucket lifecycle rule: a lifecycle config is
+      # bucket-wide, and this bucket is shared with other np.lol apps, so setting
+      # one would replace whatever rules they rely on. Listing and deleting under
+      # our own prefix cannot reach anyone else's objects.
+      - name: Prune builds past their keep-window
+        run: |
+          set -e
+          export AWS_ACCESS_KEY_ID="$DIST_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$DIST_SECRET_KEY"
+          S3="aws s3 --endpoint-url $DIST_ENDPOINT"
+          CUTOFF="$(date -u -v-${RETENTION_DAYS}d +%Y-%m-%d)"
+
+          LISTING="$($S3 ls "s3://$DIST_BUCKET/$PRUNE_PREFIX" | grep '\.zip$' | sort -k1,2 || true)"
+          # The newest versioned build is kept whatever its age, so a quiet
+          # channel can't have the object its own feed advertises deleted out
+          # from under it. The rolling copy is never a prune candidate at all.
+          NEWEST="$(printf '%s\n' "$LISTING" | grep -v 'psyduck-edge-latest.zip' | tail -1 | awk '{print $4}')"
+          echo "Keeping $NEWEST and the rolling copy, plus anything since $CUTOFF"
+
+          printf '%s\n' "$LISTING" | while read -r day _time _size name; do
+            [ -n "$name" ] || continue
+            [ "$name" != "$NEWEST" ] || continue
+            [ "$name" != "psyduck-edge-latest.zip" ] || continue
+            if [[ "$day" < "$CUTOFF" ]]; then
+              echo "Pruning $name (from $day)"
+              $S3 rm "s3://$DIST_BUCKET/$PRUNE_PREFIX$name"
+            fi
+          done
+
+      - name: Verify the published feed is publicly fetchable
+        working-directory: PsyduckMac/build/Build/Products/Release
+        run: |
+          set -e
+          # Sparkle fetches these anonymously from a user's Mac, with no
+          # credentials. A bucket readable *with* credentials but not without
+          # would upload cleanly here and still leave every installed app unable
+          # to update — which the authenticated upload step cannot catch.
+          #
+          # Runs after the prune on purpose: this is what catches a prune that
+          # deleted the object the feed advertises.
+          curl -fsS "$FEED_URL" -o /tmp/published-appcast.xml
+          xmllint --noout /tmp/published-appcast.xml
+          diff -q /tmp/published-appcast.xml appcast.xml
+          curl -fsSI "$ZIP_URL" >/dev/null
+          curl -fsSI "$ROLLING_URL" >/dev/null
+          echo "::notice::Published $CHANNEL build $APP_VERSION ($APP_BUILD)"
