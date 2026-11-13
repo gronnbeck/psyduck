@@ -133,6 +133,12 @@ struct ChatView: View {
                 .lineSpacing(3)
                 .lineLimit(2...12)
                 .focused($focused)
+                .onKeyPress(.return, phases: .down) { press in
+                    guard press.modifiers.contains(.shift) else { return .ignored }
+                    // Inserts at the cursor via the field editor, unlike appending to `draft`.
+                    NSApp.sendAction(#selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)), to: nil, from: nil)
+                    return .handled
+                }
                 .onSubmit(send)
             HStack(spacing: 8) {
                 if running, let started = store.turnStarted[workspace.id] {
