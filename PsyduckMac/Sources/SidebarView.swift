@@ -29,8 +29,9 @@ struct SidebarView: View {
             HStack(spacing: 2) {
                 AddRepoButtons(compact: true)
                 Spacer()
-                SettingsLink {
+                Button { store.showingSettings.toggle() } label: {
                     Image(systemName: "gearshape")
+                        .foregroundStyle(store.showingSettings ? Ink.ink : Ink.ink2)
                 }
                 .buttonStyle(GhostButtonStyle())
                 .help("settings")
@@ -87,7 +88,10 @@ private struct WorkspaceRow: View {
     var body: some View {
         let selected = store.selection == workspace.id
         let count = store.changes[workspace.id]?.count ?? 0
-        Button { store.selection = workspace.id } label: {
+        Button {
+            store.selection = workspace.id
+            store.showingSettings = false
+        } label: {
             HStack(spacing: 8) {
                 Circle()
                     .fill(store.isRunning(workspace.id) ? Ink.leaf : Ink.ink4)

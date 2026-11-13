@@ -45,6 +45,7 @@ final class ScreenRenderTests: XCTestCase {
         store.openDiff[workspace.id] = file
         try await render("2-diff", ShellView())
         store.openDiff[workspace.id] = nil
-        try await render("3-settings", SettingsView(), width: 560, height: 560)
+        store.showingSettings = true
+        try await render("3-settings", ShellView())
     }
 }

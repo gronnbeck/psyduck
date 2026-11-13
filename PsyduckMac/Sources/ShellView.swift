@@ -11,7 +11,9 @@ struct ShellView: View {
             SidebarView()
                 .frame(width: 250)
             InkRule()
-            if let workspace = store.selectedWorkspace {
+            if store.showingSettings {
+                SettingsView()
+            } else if let workspace = store.selectedWorkspace {
                 HSplitView {
                     CenterPane(workspace: workspace)
                         .frame(minWidth: 460, maxWidth: .infinity)
@@ -25,6 +27,9 @@ struct ShellView: View {
         }
         .background(Ink.paper)
         .foregroundStyle(Ink.ink)
+        // The np.lol palette is light only; a dark system appearance would
+        // otherwise leak into text fields and pickers.
+        .preferredColorScheme(.light)
         .alert("psyduck", isPresented: Binding(
             get: { store.errorMessage != nil },
             set: { if !$0 { store.errorMessage = nil } }

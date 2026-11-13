@@ -15,6 +15,8 @@ final class AppStore: ObservableObject {
     @Published private(set) var workspaces: [Workspace] = []
     @Published var selection: UUID?
     @Published var errorMessage: String?
+    /// Settings is a page in the main window, over the chat and changes panes.
+    @Published var showingSettings = false
 
     /// Workspaces with a claude turn in flight.
     @Published private(set) var running: Set<UUID> = []
@@ -148,6 +150,7 @@ final class AppStore: ObservableObject {
                                       baseRef: baseRef, baseCommit: commit)
             workspaces.append(workspace)
             selection = workspace.id
+            showingSettings = false
             save()
             await refreshChanges(workspace.id)
         } catch {

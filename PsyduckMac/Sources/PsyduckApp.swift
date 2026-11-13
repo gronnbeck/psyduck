@@ -32,12 +32,11 @@ struct PsyduckApp: App {
                 Button("Check for Updates…") { updater.checkForUpdates() }
                     .disabled(!updater.canCheckForUpdates)
             }
-        }
-
-        Settings {
-            SettingsView()
-                .environmentObject(settings)
-                .environmentObject(updater)
+            // ⌘, opens settings inside the main window, not a separate one.
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") { store.showingSettings = true }
+                    .keyboardShortcut(",", modifiers: .command)
+            }
         }
     }
 }
