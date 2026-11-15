@@ -1,25 +1,31 @@
 import Foundation
 
 /// What a finished command left behind.
-struct CommandResult: Sendable {
-    let status: Int32
-    let stdout: String
-    let stderr: String
+public struct CommandResult: Sendable {
+    public let status: Int32
+    public let stdout: String
+    public let stderr: String
 
-    var ok: Bool { status == 0 }
+    public init(status: Int32, stdout: String, stderr: String) {
+        self.status = status
+        self.stdout = stdout
+        self.stderr = stderr
+    }
+
+    public var ok: Bool { status == 0 }
 
     /// The most useful single line to show when it failed.
-    var failureLine: String {
+    public var failureLine: String {
         let text = stderr.isEmpty ? stdout : stderr
         return text.split(separator: "\n").first.map(String.init) ?? "exited with status \(status)"
     }
 }
 
-enum ShellError: LocalizedError {
+public enum ShellError: LocalizedError {
     case notFound(String)
     case launch(String, Error)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .notFound(let tool): return "can't find \(tool). set its path in settings."
         case .launch(let path, let error): return "couldn't run \(path): \(error.localizedDescription)"
@@ -30,12 +36,13 @@ enum ShellError: LocalizedError {
 /// Runs the command-line tools psyduck is built on (git, claude).
 ///
 /// An app started from Finder inherits launchd's PATH, not the user's shell
-/// one, so Homebrew and `~/.local/bin` are missing. Every child process gets
-/// those added, which is what lets `claude` find `gh` when it runs it.
-enum Shell {
-    static let home = FileManager.default.homeDirectoryForCurrentUser.path
+/// one, so Homebrew and `~/.local/bin` are missing; a systemd unit on Linux
+/// has the same gap. Every child process gets those added, which is what lets
+/// `claude` find `gh` when it runs it.
+public enum Shell {
+    public static let home = FileManager.default.homeDirectoryForCurrentUser.path
 
-    static var environment: [String: String] {
+    public static var environment: [String: String] {
         var env = ProcessInfo.processInfo.environment
         let extra = ["/opt/homebrew/bin", "/usr/local/bin", "\(home)/.local/bin", "\(home)/.claude/local"]
         let current = env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
@@ -44,7 +51,7 @@ enum Shell {
     }
 
     /// Where a tool usually lives, in the order worth trying.
-    static func candidates(for tool: String) -> [String] {
+    public static func candidates(for tool: String) -> [String] {
         switch tool {
         case "claude":
             return ["\(home)/.local/bin/claude", "\(home)/.claude/local/claude", "/opt/homebrew/bin/claude", "/usr/local/bin/claude"]
@@ -55,7 +62,7 @@ enum Shell {
 
     /// The configured path if there is one, otherwise the first candidate
     /// that exists.
-    static func resolve(_ tool: String, configured: String) throws -> String {
+    public static func resolve(_ tool: String, configured: String) throws -> String {
         let path = (configured as NSString).expandingTildeInPath.trimmingCharacters(in: .whitespaces)
         if !path.isEmpty { return path }
         if let found = candidates(for: tool).first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
@@ -66,8 +73,13 @@ enum Shell {
 
     /// Asks a login shell, which knows the user's real PATH, then falls back
     /// to the usual places.
-    static func detect(_ tool: String) async -> String? {
-        if let result = try? await run("/bin/zsh", ["-lc", "command -v \(tool)"]), result.ok {
+    public static func detect(_ tool: String) async -> String? {
+        #if os(macOS)
+        let loginShell = "/bin/zsh"
+        #else
+        let loginShell = "/bin/sh"
+        #endif
+        if let result = try? await run(loginShell, ["-lc", "command -v \(tool)"]), result.ok {
             let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
             if path.hasPrefix("/") { return path }
         }
@@ -75,7 +87,7 @@ enum Shell {
     }
 
     /// Runs to completion and collects output.
-    static func run(_ path: String, _ arguments: [String], directory: URL? = nil,
+    public static func run(_ path: String, _ arguments: [String], directory: URL? = nil,
                     input: Data? = nil) async throws -> CommandResult {
         let out = DataBox()
         let result = try await stream(path, arguments, directory: directory, input: input) {
@@ -87,7 +99,7 @@ enum Shell {
 
     /// Runs to completion, handing each line of stdout over as it arrives —
     /// how a chat turn streams while claude is still working.
-    static func stream(_ path: String, _ arguments: [String], directory: URL? = nil,
+    public static func stream(_ path: String, _ arguments: [String], directory: URL? = nil,
                        input: Data? = nil,
                        onLine: @escaping (Data) -> Void) async throws -> CommandResult {
         guard FileManager.default.isExecutableFile(atPath: path) else {
@@ -112,28 +124,6 @@ enum Shell {
                 let errors = DataBox()
                 let group = DispatchGroup()
 
-                group.enter()
-                stdout.fileHandleForReading.readabilityHandler = { handle in
-                    let chunk = handle.availableData
-                    if chunk.isEmpty {
-                        handle.readabilityHandler = nil
-                        lines.finish()
-                        group.leave()
-                    } else {
-                        lines.append(chunk)
-                    }
-                }
-                group.enter()
-                stderr.fileHandleForReading.readabilityHandler = { handle in
-                    let chunk = handle.availableData
-                    if chunk.isEmpty {
-                        handle.readabilityHandler = nil
-                        group.leave()
-                    } else {
-                        errors.append(chunk)
-                    }
-                }
-
                 process.terminationHandler = { process in
                     // Output can still be in the pipes when the process exits;
                     // wait for both to reach end-of-file before reporting.
@@ -146,15 +136,31 @@ enum Shell {
                 }
 
                 do {
-                    try process.run()
+                    // Entered before the launch so the termination handler,
+                    // which can run at once, always waits for the readers.
+                    group.enter()
+                    group.enter()
+                    do {
+                        try launch(process)
+                    } catch {
+                        process.terminationHandler = nil
+                        group.leave()
+                        group.leave()
+                        throw error
+                    }
+                    drain(stdout.fileHandleForReading, into: { lines.append($0) }) {
+                        lines.finish()
+                        group.leave()
+                    }
+                    drain(stderr.fileHandleForReading, into: { errors.append($0) }) {
+                        group.leave()
+                    }
                     if let stdin, let input {
                         // Written then closed, so the child sees end-of-file.
                         try? stdin.fileHandleForWriting.write(contentsOf: input)
                         try? stdin.fileHandleForWriting.close()
                     }
                 } catch {
-                    stdout.fileHandleForReading.readabilityHandler = nil
-                    stderr.fileHandleForReading.readabilityHandler = nil
                     continuation.resume(throwing: ShellError.launch(path, error))
                 }
             }
@@ -162,9 +168,44 @@ enum Shell {
             if process.isRunning { process.terminate() }
         }
     }
+
+    /// Starts the process with no signals blocked.
+    ///
+    /// A child inherits the signal mask of the thread that spawns it. On
+    /// Linux the threads Swift runs tasks on block nearly every signal, so a
+    /// child started from one would never see SIGTERM, and stopping a turn
+    /// would do nothing. macOS threads don't block them.
+    private static func launch(_ process: Process) throws {
+        #if os(Linux)
+        var none = sigset_t()
+        var previous = sigset_t()
+        sigemptyset(&none)
+        pthread_sigmask(SIG_SETMASK, &none, &previous)
+        defer { pthread_sigmask(SIG_SETMASK, &previous, nil) }
+        #endif
+        try process.run()
+    }
+
+    /// Reads a pipe to its end on a thread of its own, then closes it.
+    ///
+    /// A blocking read, not `readabilityHandler`: that one sits on a dispatch
+    /// source, which on Linux can miss the end-of-file when a descriptor
+    /// number is reused, and keeps the descriptor open afterwards.
+    private static func drain(_ handle: FileHandle, into sink: @escaping (Data) -> Void,
+                              then finish: @escaping () -> Void) {
+        Thread.detachNewThread {
+            while true {
+                let chunk = handle.availableData
+                if chunk.isEmpty { break }
+                sink(chunk)
+            }
+            finish()
+            try? handle.close()
+        }
+    }
 }
 
-/// Splits a byte stream into lines. Called from one pipe's handler queue only.
+/// Splits a byte stream into lines. Called from one pipe's reader thread only.
 private final class LineBuffer: @unchecked Sendable {
     private var pending = Data()
     private let onLine: (Data) -> Void

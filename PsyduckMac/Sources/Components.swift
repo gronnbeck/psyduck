@@ -1,3 +1,4 @@
+import PsyduckCore
 import SwiftUI
 
 /// Tinker's button: primary (lime), secondary (keycap), ghost, danger. Primary

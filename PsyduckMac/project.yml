@@ -7,6 +7,10 @@ packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     from: "2.9.5"
+  # The engine (repos, worktrees, claude turns, event logs): the Swift
+  # package at the repo root, shared with the server and CLI.
+  psyduck:
+    path: ..
 targets:
   Psyduck:
     type: application
@@ -21,6 +25,8 @@ targets:
         buildPhase: resources
     dependencies:
       - package: Sparkle
+      - package: psyduck
+        product: PsyduckCore
     info:
       path: Sources/Info.plist
       properties:

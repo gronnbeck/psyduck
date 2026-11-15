@@ -1,3 +1,4 @@
+import PsyduckCore
 import SwiftUI
 
 /// One workspace's session with Claude: header, transcript, composer.
@@ -7,7 +8,9 @@ struct ChatView: View {
     @State private var draft = ""
     @FocusState private var focused: Bool
 
-    private var running: Bool { store.isRunning(workspace.id) }
+    private var session: Transcript { store.transcript(workspace.id) }
+    private var items: [ChatItem] { session.items }
+    private var running: Bool { session.running }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -58,7 +61,7 @@ struct ChatView: View {
 
     /// "Agent is poking at user.rb…" — from the last tool call of this turn.
     private var activity: String {
-        guard let last = workspace.items.last, last.kind == .tool else { return "Agent is thinking…" }
+        guard let last = items.last, last.kind == .tool else { return "Agent is thinking…" }
         if let path = last.filePath { return "Agent is poking at \((path as NSString).lastPathComponent)…" }
         if last.isShell, let command = last.detail?.split(separator: " ").first { return "Agent is running \(command)…" }
         return "Agent is working…"
@@ -70,7 +73,7 @@ struct ChatView: View {
     /// Claude did in reply, grouped under one avatar.
     private var turns: [Turn] {
         var result: [Turn] = []
-        for item in workspace.items {
+        for item in items {
             if item.kind == .user {
                 result.append(Turn(user: item, reply: []))
             } else if result.isEmpty {
@@ -86,7 +89,7 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
-                    if workspace.items.isEmpty {
+                    if items.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("New workspace").font(.display(22))
                             Text("Claude works in its own copy of \(workspace.baseRef), on \(workspace.branch):")
@@ -98,12 +101,12 @@ struct ChatView: View {
                     ForEach(Array(turns.enumerated()), id: \.offset) { index, turn in
                         if let user = turn.user { UserBubble(text: user.text) }
                         let isLast = index == turns.count - 1
-                        let partial = isLast ? (store.streaming[workspace.id] ?? "") : ""
+                        let partial = isLast ? session.streaming : ""
                         if !turn.reply.isEmpty || (isLast && running) {
                             ClaudeTurn(items: turn.reply, partial: partial, running: isLast && running)
                         }
                     }
-                    if let queued = store.queued[workspace.id] {
+                    if let queued = session.queued {
                         UserBubble(text: queued, queued: true)
                     }
                     Color.clear.frame(height: 1).id("bottom")
@@ -113,8 +116,8 @@ struct ChatView: View {
                 .padding(.horizontal, 24)
                 .padding(.vertical, 32)
             }
-            .onChange(of: workspace.items.count) { proxy.scrollTo("bottom", anchor: .bottom) }
-            .onChange(of: store.streaming[workspace.id]) { proxy.scrollTo("bottom", anchor: .bottom) }
+            .onChange(of: items.count) { proxy.scrollTo("bottom", anchor: .bottom) }
+            .onChange(of: session.streaming) { proxy.scrollTo("bottom", anchor: .bottom) }
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
         }
     }
@@ -141,13 +144,13 @@ struct ChatView: View {
                 }
                 .onSubmit(send)
             HStack(spacing: 8) {
-                if running, let started = store.turnStarted[workspace.id] {
+                if running, let started = session.turnStarted {
                     TimelineView(.periodic(from: started, by: 0.1)) { context in
                         Text(String(format: "%.1fs", context.date.timeIntervalSince(started)))
                     }
                     .font(.mono(12))
                     .foregroundStyle(Tk.inkFaint)
-                    if store.queued[workspace.id] != nil {
+                    if session.queued != nil {
                         Text("· follow-up queued").font(.sans(12)).foregroundStyle(Tk.inkFaint)
                     }
                 } else {

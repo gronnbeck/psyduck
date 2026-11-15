@@ -1,7 +1,7 @@
 import Foundation
 
 /// What psyduck cares about in claude's `--output-format stream-json` output.
-enum ClaudeEvent: Equatable {
+public enum ClaudeEvent: Equatable, Sendable {
     case started(sessionID: String)
     /// A token chunk of the reply being written (needs `--include-partial-messages`).
     case textDelta(String)
@@ -13,9 +13,19 @@ enum ClaudeEvent: Equatable {
     case finished(isError: Bool, message: String?, durationMs: Int?, costUSD: Double?, sessionID: String?)
 }
 
-enum ClaudeStream {
+public enum ClaudeStream {
+    /// The arguments for one chat turn. The prompt goes in on stdin.
+    public static func arguments(sessionID: String?, permissionMode: String, model: String) -> [String] {
+        var arguments = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+                         "--permission-mode", permissionMode]
+        if let sessionID { arguments += ["--resume", sessionID] }
+        let model = model.trimmingCharacters(in: .whitespaces)
+        if !model.isEmpty { arguments += ["--model", model] }
+        return arguments
+    }
+
     /// Parses one line of stream-json. Lines it doesn't recognise yield nothing.
-    static func parse(_ line: Data) -> [ClaudeEvent] {
+    public static func parse(_ line: Data) -> [ClaudeEvent] {
         guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
               let type = object["type"] as? String else { return [] }
 
@@ -79,7 +89,7 @@ enum ClaudeStream {
     }
 
     /// The one argument worth showing for a tool call.
-    static func summarize(_ input: [String: Any]) -> String {
+    public static func summarize(_ input: [String: Any]) -> String {
         for key in ["command", "file_path", "notebook_path", "pattern", "url", "query", "path", "description", "prompt"] {
             if let value = input[key] as? String, !value.isEmpty {
                 let line = value.split(separator: "\n").first.map(String.init) ?? value

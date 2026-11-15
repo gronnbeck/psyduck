@@ -1,3 +1,4 @@
+import PsyduckCore
 import SwiftUI
 
 /// The right-hand panel: the branch's next step (top right), every file the
@@ -237,7 +238,7 @@ private struct InlineDiff: View {
         .overlay(RoundedRectangle(cornerRadius: Tk.radiusLg, style: .continuous).strokeBorder(Tk.line, lineWidth: 1))
         .task(id: "\(file.path)|\(file.additions ?? -1)|\(file.deletions ?? -1)") {
             do {
-                let text = try await store.settings.git.diff(of: file, in: workspace.path, base: workspace.baseCommit)
+                let text = try await store.diff(of: file, in: workspace)
                 lines = Git.parseDiff(text).filter { $0.kind != .header }
                 error = nil
             } catch {

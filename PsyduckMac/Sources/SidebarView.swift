@@ -1,4 +1,5 @@
 import AppKit
+import PsyduckCore
 import SwiftUI
 
 struct SidebarView: View {
