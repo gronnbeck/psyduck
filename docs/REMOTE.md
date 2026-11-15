@@ -2,6 +2,8 @@
 
 Status: proposed, nothing built yet.
 
+Hosts on EC2 are set up by the bootstrapper in [EC2.md](EC2.md).
+
 Goal: run psyduck agents on a remote machine and check on them from
 anywhere. You can start a workspace with a prompt, close the laptop, and come
 back to the live state: whether claude is still running, what it said, what
