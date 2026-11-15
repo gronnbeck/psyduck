@@ -70,6 +70,33 @@ MCP server. An MCP server only matters for a Claude without a shell (claude.ai,
 desktop, phone). It would mean exposing psyduckd over HTTP with real auth, so
 it's out of scope until someone wants that.
 
+## Linux
+
+The remote machine is Linux, so `PsyduckCore`, `psyduckd` and `psyduck`
+must build on Linux from phase 1.
+
+- **Portability is mostly there.** The core files use only Foundation, and
+  `Process`, `FileHandle` and `NSLock` all exist in swift-corelibs-foundation.
+- **What has to change:**
+  - `AppSettings` keeps settings in `UserDefaults`. On the server they move to
+    a config file, `~/.config/psyduck/config.json`.
+  - App state moves from Application Support to `~/.local/share/psyduck/`:
+    `state.json` and the event logs.
+  - `Shell` adds Homebrew paths to `PATH` and searches them for tools. Keep
+    `~/.local/bin` (the native claude installer puts it there) and
+    `/usr/local/bin`. The Homebrew paths are harmless on Linux.
+- **Build:** use the Swift static Linux SDK (`swift build --swift-sdk
+  x86_64-swift-linux-musl`, plus aarch64) to produce one static binary
+  per architecture, with no Swift runtime to install.
+- **Run:** a systemd user unit, `psyduckd.service`, with
+  `loginctl enable-linger` so it keeps running after you log out. `psyduck
+  install-service` writes the unit.
+- **CI:** a Linux job on `ubuntu-latest` builds and tests `PsyduckCore`,
+  including the worktree and primary-action tests (they only need git).
+- **Release:** the same edge pipeline uploads the binaries to the bucket under
+  `psyduck/edge/linux/`. There's no signing or notarization on Linux.
+  `curl … | tar x` installs it.
+
 ## What the remote machine needs
 
 - `claude` installed and logged in (`claude setup-token`, or an API key)
@@ -81,18 +108,18 @@ your own Mac.
 
 ## Phases
 
-1. **`PsyduckCore` + event log.** Extract the engine. The Mac app behaves the
+1. **`PsyduckCore` + event log.** Extract the engine as a SwiftPM package that
+   builds on macOS and Linux, and add a Linux CI job. The Mac app behaves the
    same on top of it, and the existing tests pin that behaviour.
-2. **`psyduckd` + `psyduck` CLI.** CI builds and tests on Linux too. Try them
-   against a real box over SSH.
+2. **`psyduckd` + `psyduck` CLI.** Ship static Linux binaries and a systemd
+   user unit. Try them against a real Linux box over SSH.
 3. **Remote hosts in the app.** Add a host in settings, and its workspaces
    show in the sidebar under it.
 4. *(Maybe)* HTTP + auth, and an MCP server for clients that have no shell.
 
 ## Open questions
 
-- **Which remote machine?** A Linux VPS (e.g. Hetzner), a Mac mini, or
-  either? This decides whether phase 1 must build on Linux from the start.
+- ~~Which remote machine?~~ Linux. See [Linux](#linux).
 - **What's a "workflow"?** The one-shot `prompt → actions` run above, or
   multi-step recipes (prompt, run tests, prompt again, open PR) defined in a
   file in the repo?
