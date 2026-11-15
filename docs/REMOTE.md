@@ -126,5 +126,9 @@ your own Mac.
 - ~~Which remote machine?~~ Linux. See [Linux](#linux).
 - ~~What's a "workflow"?~~ A normal psyduck session (workspace + chat). See
   the top.
-- **Shared or per-user workspaces?** Does a remote host serve one person, or
-  several people (e.g. Ken and Håvard) on the same box?
+- ~~Shared or per-user workspaces?~~ Per user for now. Each user runs their
+  own `psyduckd` under their own Linux account, with their own claude login,
+  git and gh credentials, and workspaces. There are no accounts or
+  permissions inside psyduck, because the Unix user and SSH key are the
+  boundary. Several people can share a machine by each having an account
+  on it.
