@@ -9,10 +9,16 @@ on:
     branches: [ main ]
     paths:
       - "PsyduckMac/**"
+      # The app compiles PsyduckCore, the package at the repo root.
+      - "Package.swift"
+      - "Sources/PsyduckCore/**"
       - ".github/workflows/macos.yml"
   pull_request:
     paths:
       - "PsyduckMac/**"
+      # The app compiles PsyduckCore, the package at the repo root.
+      - "Package.swift"
+      - "Sources/PsyduckCore/**"
       - ".github/workflows/macos.yml"
   workflow_dispatch: {}
 
