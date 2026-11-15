@@ -1,7 +1,10 @@
 # EC2 host bootstrapper (spec)
 
-Status: proposed, nothing built yet. Depends on [REMOTE.md](REMOTE.md) for
-what runs on the host.
+Status: built as `psyduck host` (`Sources/PsyduckHost`, `Sources/psyduck`),
+and checked with unit tests and `--dry-run` only. **It has not yet been run
+against a real AWS account.** The first real `create` should be watched, and
+the live test below is how to do it. Depends on [REMOTE.md](REMOTE.md) for what
+runs on the host: `psyduckd` doesn't ship yet, so hosts come up without it.
 
 Goal: from your Mac, one command gives you a Linux EC2 machine that is ready
 to run psyduck sessions. It has `psyduckd` running, claude logged in, git and
@@ -44,26 +47,35 @@ These are part of the `psyduck` CLI and run on the Mac. They shell out to
 
 | Command | Does |
 |---|---|
-| `psyduck host create <name> [--region] [--type] [--disk]` | Provision, bootstrap, log in, and register the host |
+| `psyduck host create <name> [--type] [--disk] [--arch] [--access] [--key] [--no-login]` | Provision, bootstrap, log in, and register the host |
 | `psyduck host list` | Hosts tagged `psyduck:managed`, with their state |
 | `psyduck host ssh <name>` | Open a shell on the host |
 | `psyduck host stop <name>` / `start <name>` | Stop or start the instance. The disk, and so the workspaces, stay |
 | `psyduck host destroy <name>` | Terminate the instance and delete its security group and ssh entry (confirmed) |
 | `psyduck host login <name>` | Redo the claude/gh logins on the host |
+| `psyduck host allow-ip <name>` | For `--access ssh-ip` hosts: move the port 22 rule to your current IP |
+
+Every command takes `--profile`, `--region` and `--dry-run`. The profile and
+region are passed to every `aws` call. Once a host is created they're
+remembered in `~/.config/psyduck/hosts.json`, so `psyduck host stop dev` needs
+no flags. Build the CLI with `swift build` at the repo root, and run it with
+`swift run psyduck host …`.
 
 Every step is idempotent and finds its resources by tag. If `create` fails
-halfway, running it again continues from where it stopped. `--dry-run` prints
-the `aws` commands without running them.
+halfway, running it again continues from where it stopped. A stopped host is
+started again. `--dry-run` prints the `aws` and `ssh` commands without running
+them, with placeholders like `<instance-id>` for ids that only exist after a
+real run. It also prints the first-boot script and the ssh entry.
 
 ## Defaults
 
 | | Default | Why |
 |---|---|---|
 | OS | Ubuntu 24.04 LTS | Well-trodden, and Swift's static Linux binaries run on it |
-| Arch | arm64 (Graviton) | Cheaper per vCPU; `psyduckd` ships for aarch64 anyway |
+| Arch | arm64 (Graviton) | Cheaper per vCPU; `psyduckd` ships for aarch64 anyway. `--arch amd64` for x86 types |
 | Type | `t4g.large` (2 vCPU, 8 GB) | Enough for claude plus a build; override with `--type` |
 | Disk | 50 GB gp3, root | Worktrees and repo clones live here |
-| Region | the profile's region | `--region` to override |
+| Region | `AWS_REGION`, then the profile's region | `--region` to override |
 | Network | the default VPC, a public subnet | Outbound internet for claude, GitHub and apt |
 
 The AMI comes from Canonical's public SSM parameter, not a hard-coded id:
@@ -90,11 +102,14 @@ What it needs:
 it can update and remove its own entries:
 
 ```
+# psyduck: <name> (managed by `psyduck host`)
 Host psyduck-<name>
   HostName i-0123456789abcdef0
   User ubuntu
   IdentityFile ~/.ssh/id_ed25519
+  IdentitiesOnly yes
   ProxyCommand aws ssm start-session --target %h --document-name AWS-StartSSHSession --parameters portNumber=%p --region <region> --profile <profile>
+# psyduck: end <name>
 ```
 
 After that, `ssh psyduck-<name>` works, and so does the transport in
@@ -102,18 +117,20 @@ REMOTE.md (`ssh psyduck-<name> psyduck attach`).
 
 Fallback: `--access ssh-ip` opens port 22 only to your current public IP.
 `psyduck host allow-ip <name>` updates it when your IP changes. Use it where
-Session Manager isn't allowed.
+Session Manager isn't allowed. The ssh entry then points at the instance's
+public IP, which changes on every start, so `psyduck host start` rewrites it.
 
 ## What `create` does
 
 1. **Preflight**
    - `aws sts get-caller-identity` succeeds.
    - The region is set.
-   - The Session Manager plugin is installed.
+   - The Session Manager plugin is installed (not needed for `ssh-ip`).
    - An SSH key exists (`~/.ssh/id_ed25519.pub`, or `--key`).
 2. **Shared setup**, once per account and region
    - Import the public key as the key pair `psyduck-<mac user>`.
-   - Create the IAM role and instance profile `psyduck-host`.
+   - Create the IAM role and instance profile `psyduck-host`. A new profile
+     takes a few seconds to reach EC2, so the launch retries while it does.
 3. **Security group** `psyduck-<name>`: no inbound rules, outbound open.
 4. **Launch** with `run-instances`:
    - The AMI, type, disk, key pair, instance profile and security group above.
@@ -124,15 +141,21 @@ Session Manager isn't allowed.
    - Tags: `Name=psyduck-<name>`, `psyduck:managed=true`, `psyduck:host=<name>`.
    - User data: the cloud-init script below. It contains **no secrets**,
      because user data can be read back with `describe-instance-attribute`.
-5. **Wait**
-   - `aws ec2 wait instance-running`.
-   - Then the SSM agent shows as online.
-   - Then `ssh … cloud-init status --wait` exits 0.
-6. **Log in** over SSH, the same steps as `psyduck host login`; see below.
-7. **Register**
+5. **Register**, once `aws ec2 wait instance-running` returns
    - Write the `~/.ssh/config` entry.
-   - Add the host to the psyduck app's host list.
-   - Print `ssh psyduck-<name>`.
+   - Record the host in `~/.config/psyduck/hosts.json` (name, instance id,
+     region, profile, access mode). The Mac app will read its host list from
+     the same file.
+   - This happens before the waits below, because they use the ssh entry. It
+     also means `host ssh` and `host destroy` work on a host whose first boot
+     failed.
+6. **Wait**
+   - The SSM agent shows as online.
+   - Then `ssh … cloud-init status --wait` finishes. It retries while sshd
+     isn't up yet.
+7. **Log in** over SSH, the same steps as `psyduck host login`; see below.
+   `--no-login` skips it.
+8. Print `ssh psyduck-<name>`.
 
 ### cloud-init (no secrets)
 
@@ -152,7 +175,8 @@ Runs as root on first boot:
    `~/.config/psyduck/` (mode 700).
 
 Until `psyduckd` ships (REMOTE.md phase 2), the bootstrapper skips the psyduck
-download. The rest is useful on its own as a box to run `claude` on, so this
+download (`CloudInit.installPsyduck` is off, and no flag turns it on yet). The
+archive and checksum file names in the code are the planned ones. The rest is useful on its own as a box to run `claude` on, so this
 can be built alongside REMOTE.md.
 
 ### Logins (over SSH, interactive)
@@ -160,14 +184,16 @@ can be built alongside REMOTE.md.
 Credentials never go into user data, tags or the AMI. They're set up over
 the SSH session:
 
-- **claude:** `ssh -t psyduck-<name> claude setup-token` runs the login on
-  the box. The long-lived token it prints goes into
-  `~/.config/psyduck/env` (mode 600) as `CLAUDE_CODE_OAUTH_TOKEN`, which the
-  systemd unit loads. Running it on the box means the token never passes
-  through the Mac's shell history.
+- **claude:** `ssh -t psyduck-<name>` runs `claude setup-token` on the box.
+  It prints a long-lived token, and the same remote script then asks you to
+  paste it (not echoed) and writes it to `~/.config/psyduck/env` (mode 600) as
+  `CLAUDE_CODE_OAUTH_TOKEN`, which the systemd unit will load. All of that
+  runs on the box, so the token never reaches the Mac's shell history or
+  files.
 - **GitHub:**
-  - `ssh -t psyduck-<name> gh auth login` uses the device flow, then
-    `gh auth setup-git`, so git over HTTPS uses gh's credentials.
+  - `ssh -t psyduck-<name>` runs `gh auth login`, which offers the browser
+    device flow or pasting a token, then `gh auth setup-git`, so git over
+    HTTPS uses gh's credentials.
   - The bootstrapper does **not** copy the Mac's `gh auth token`. That token
     usually has broad scopes, and the box runs agents in
     `bypassPermissions`.
@@ -184,15 +210,21 @@ It needs:
 
 - `ec2:RunInstances`, `TerminateInstances`, `StartInstances`,
   `StopInstances`, `Describe*`, `CreateTags`
-- `ec2:CreateSecurityGroup`, `DeleteSecurityGroup`,
-  `AuthorizeSecurityGroupIngress` (only for `--access ssh-ip`)
+- `ec2:CreateSecurityGroup`, `DeleteSecurityGroup`
+- `ec2:AuthorizeSecurityGroupIngress`, `RevokeSecurityGroupIngress` (only for
+  `--access ssh-ip`)
 - `ec2:ImportKeyPair`
-- `iam:CreateRole`, `AttachRolePolicy`, `CreateInstanceProfile`,
+- `iam:GetRole`, `CreateRole`, `TagRole`, `AttachRolePolicy`,
+  `GetInstanceProfile`, `CreateInstanceProfile`, `TagInstanceProfile`,
   `AddRoleToInstanceProfile`, `PassRole` (on `psyduck-host` only)
-- `ssm:StartSession` (on instances tagged `psyduck:managed=true`),
+- `ssm:StartSession` (on instances tagged `psyduck:managed=true`, and the
+  `AWS-StartSSHSession` document), `ssm:DescribeInstanceInformation`,
   `ssm:GetParameter` (the AMI parameter)
 
-The docs will include a ready-made policy JSON scoped to those resources and tags.
+[`ec2-iam-policy.json`](ec2-iam-policy.json) is a policy with those
+permissions, scoped to the `psyduck-host` role and to resources tagged
+`psyduck:managed=true` where AWS allows it. It hasn't been tried against a
+real account yet, so expect to adjust it on first use.
 
 ### The instance role (`psyduck-host`)
 
@@ -211,14 +243,21 @@ permissions, so an agent running in bypass mode can't touch the account.
 
 ## Testing
 
-- **Unit:** the `aws` and `ssh` argument builders, the ssh-config block
-  editing, and the cloud-init rendering. These are pure functions, so no AWS
-  is needed.
+- **Unit** (`swift test`): the `aws` and `ssh` argument builders, the
+  ssh-config block editing, and the cloud-init rendering, which are pure
+  functions. The whole `create`, `destroy`, `login`, `start` and `allow-ip`
+  flows also run against a fake command runner, covering a fresh account, a
+  re-run, and failures. No AWS is needed, and CI runs them on Linux.
 - **`--dry-run`:** prints every command, so the flow can be reviewed without
   creating anything.
 - **Live, gated** by `PSYDUCK_LIVE_EC2=1`, billed: create a `t4g.small`, wait
   for cloud-init, check `claude --version` and `gh --version` over SSM SSH, then
-  destroy it. Never run in CI.
+  destroy it. Never run in CI. **It has not been run yet.**
+
+  ```sh
+  PSYDUCK_LIVE_EC2=1 PSYDUCK_LIVE_EC2_PROFILE=<profile> PSYDUCK_LIVE_EC2_REGION=<region> \
+    swift test --filter LiveEC2Tests
+  ```
 
 ## Open questions
 
