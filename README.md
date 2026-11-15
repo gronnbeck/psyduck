@@ -45,12 +45,20 @@ open Psyduck.xcodeproj          # or:
 xcodebuild -scheme Psyduck -destination 'platform=macOS' test
 ```
 
+The engine is a plain Swift package and tests without Xcode, on macOS or
+Linux:
+
+```sh
+swift test
+```
+
 Local builds are ad-hoc signed and have no update feed, so Sparkle stays off.
 
 ## Layout
 
 | Path | What |
 |---|---|
+| `Sources/PsyduckCore/` | The engine: repos, worktrees, claude turns, event logs, branch actions. A Swift package, macOS and Linux |
 | `PsyduckMac/` | The SwiftUI app; `project.yml` is the XcodeGen spec (the `.xcodeproj` isn't committed) |
 | `PsyduckMac/Icon/make-icon.swift` | The icon generator. It *is* the artwork |
 | `.github/workflows/macos.yml` | Build and test on every PR and push |

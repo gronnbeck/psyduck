@@ -1,6 +1,7 @@
 # Remote workspaces (plan)
 
-Status: proposed, nothing built yet.
+Status: phase 1 is built (`PsyduckCore`, the engine and the event log, on
+macOS and Linux). Phases 2 and 3 are not.
 
 Hosts on EC2 are set up by the bootstrapper in [EC2.md](EC2.md).
 
@@ -32,16 +33,35 @@ most of the refactor.
 
 ### Event log
 
-Each workspace's history is a numbered list of events:
+Each workspace's history is a numbered list of events, one JSON object per
+line in `events/<workspace id>.jsonl`:
 
-- turn started, text, tool use, tool result, turn finished
-- queued prompt
-- branch state changed (ahead/behind, dirty, PR)
+```json
+{"seq":1,"at":"2026-11-15T10:00:00Z","type":"prompt","text":"add a duck"}
+{"seq":2,"at":"2026-11-15T10:00:01Z","type":"session","sessionID":"…"}
+{"seq":3,"at":"2026-11-15T10:00:04Z","type":"tool_use","id":"t1","name":"Bash","summary":"ls"}
+```
 
-Chat items and workspace state are built from those events rather than stored
-on their own. A client that disconnects asks for `since=N` and catches up. The
-agent keeps running whether or not anything is connected. The local app uses
-the same log, so local and remote workspaces behave the same way.
+| `type` | Means |
+|---|---|
+| `prompt` | The user's message; a turn starts |
+| `queued` | A follow-up sent while claude was busy (the whole waiting text) |
+| `session` | claude's session id for the turn |
+| `text` | A finished block of claude's reply |
+| `tool_use` / `tool_result` | A tool call and what it returned |
+| `result` | claude's end-of-turn line: duration, cost, error |
+| `turn_ended` | The claude process is gone; `cancelled` if it was stopped |
+| `note` | A line psyduck adds: "committed abc123", or a failure |
+| `delta` / `partial` | Live only, never stored: reply tokens as they arrive, and the reply so far for a client joining mid-reply |
+
+Chat rows and session state (running, queued, cost) are built from those
+events by `Transcript`, rather than stored on their own. A client that
+disconnects asks for `since=N` and catches up. The agent keeps running whether
+or not anything is connected. The local app uses the same engine and log, so
+local and remote workspaces behave the same way.
+
+Changed files and branch state (ahead/behind, dirty, PR) are not in the log.
+A client asks for them, as the app does every few seconds.
 
 ## API
 
