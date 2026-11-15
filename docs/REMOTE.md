@@ -7,6 +7,11 @@ anywhere. You can start a workspace with a prompt, close the laptop, and come
 back to the live state: whether claude is still running, what it said, what
 changed and where the branch stands.
 
+A remote workflow is a normal psyduck session, running somewhere else: a
+workspace (worktree + branch) with its chat with claude. You can send
+follow-ups, stop it, see its changes and run the primary action, the same as
+locally. There are no recipes or pipelines on top.
+
 ## Shape
 
 ```
@@ -41,14 +46,13 @@ the same log, so local and remote workspaces behave the same way.
 | Call | Does |
 |---|---|
 | `GET /workspaces` | Summaries: running, branch, ahead/behind, dirty count, PR |
-| `POST /workspaces {repo, baseRef?}` | Create a worktree |
+| `POST /workspaces {repo, baseRef?, prompt?}` | Create a workspace. With `prompt`, its first turn starts right away |
 | `GET /workspaces/:id` | Full state: changed files, branch, PR, current turn, cost |
 | `GET /workspaces/:id/diff?path=` | One file's diff |
 | `POST /workspaces/:id/turns {prompt}` | Start a turn, or queue it if one is running |
 | `GET /workspaces/:id/events?since=N` | Replay from N, then stay open for live events |
 | `POST /workspaces/:id/stop` | Stop the running turn |
 | `POST /workspaces/:id/action` | Run the primary action (`PrimaryAction.decide`) |
-| `POST /runs {repo, prompt, then: [...]}` | One-shot workflow: new workspace, then the prompt, then actions (e.g. `createPR`); returns the workspace id |
 
 The CLI mirrors these calls, and `--json` gives machine-readable output.
 
@@ -120,8 +124,7 @@ your own Mac.
 ## Open questions
 
 - ~~Which remote machine?~~ Linux. See [Linux](#linux).
-- **What's a "workflow"?** The one-shot `prompt → actions` run above, or
-  multi-step recipes (prompt, run tests, prompt again, open PR) defined in a
-  file in the repo?
+- ~~What's a "workflow"?~~ A normal psyduck session (workspace + chat). See
+  the top.
 - **Shared or per-user workspaces?** Does a remote host serve one person, or
   several people (e.g. Ken and Håvard) on the same box?
