@@ -13,6 +13,7 @@ xcuserdata/
 
 # Swift Package Manager
 .build/
+.build-linux/
 .swiftpm/
 Package.resolved
 
