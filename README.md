@@ -56,6 +56,7 @@ Local builds are ad-hoc signed and have no update feed, so Sparkle stays off.
 | `.github/workflows/macos.yml` | Build and test on every PR and push |
 | `.github/workflows/macos-release.yml` | Signed, notarized edge build, plus the Sparkle appcast |
 | `docs/DISTRIBUTION.md` | How releases work, and what secrets they need |
+| `docs/REMOTE.md` | Plan: run agents on a remote machine (psyduckd + CLI) |
 
 ## License
 
