@@ -113,6 +113,9 @@ struct ChatView: View {
                 .padding(.horizontal, 24)
                 .padding(.vertical, 32)
             }
+            // Pinned to the bottom, so a block above the fold changing height
+            // doesn't shove what you're reading around.
+            .defaultScrollAnchor(.bottom)
             .onChange(of: workspace.items.count) { proxy.scrollTo("bottom", anchor: .bottom) }
             .onChange(of: store.streaming[workspace.id]) { proxy.scrollTo("bottom", anchor: .bottom) }
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
@@ -411,6 +414,10 @@ private struct TerminalBlock: View {
                     .padding(.vertical, 12)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            // A legacy (mouse) scroller takes ~14pt of height and comes and
+            // goes between layout passes, which made the whole transcript
+            // jitter. Trackpad and shift-scroll still scroll sideways.
+            .scrollIndicators(.never)
         }
         .background(Tk.bg000)
         .clipShape(RoundedRectangle(cornerRadius: Tk.radiusLg, style: .continuous))
