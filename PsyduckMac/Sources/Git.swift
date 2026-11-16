@@ -111,6 +111,18 @@ struct Git {
         return commit
     }
 
+    /// Saves a worktree's uncommitted work, untracked files included, as a
+    /// commit on top of HEAD kept under `ref`, without moving the branch.
+    /// Returns nil when there's nothing to keep.
+    func snapshotWork(in worktree: String, ref: String) async throws -> String? {
+        guard try await !output(["status", "--porcelain"], in: worktree).isEmpty else { return nil }
+        try await output(["add", "-A"], in: worktree)
+        let tree = try await output(["write-tree"], in: worktree)
+        let commit = try await output(["commit-tree", tree, "-p", "HEAD", "-m", "psyduck: archived work"], in: worktree)
+        try await output(["update-ref", ref, commit], in: worktree)
+        return commit
+    }
+
     /// Removes the worktree directory. The branch stays, so no work is lost.
     func removeWorktree(repo: String, directory: String) async throws {
         try await output(["worktree", "remove", "--force", directory], in: repo)
