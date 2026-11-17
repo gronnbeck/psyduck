@@ -164,6 +164,20 @@ struct Git {
 
     // MARK: - Diffs
 
+    /// What a workspace's changes are measured against: where its branch and
+    /// the base branch upstream last met, which is what a pull request
+    /// compares against too. The commit recorded when the workspace was made
+    /// falls behind as soon as the base branch is merged or rebased in, and
+    /// comparing against it then lists everyone else's work as this
+    /// workspace's.
+    func diffBase(in worktree: String, baseRef: String, baseCommit: String) async -> String {
+        let name = baseRef.hasPrefix("origin/") ? String(baseRef.dropFirst(7)) : baseRef
+        for ref in ["refs/remotes/origin/\(name)", baseRef] {
+            if let met = try? await output(["merge-base", "HEAD", ref], in: worktree), !met.isEmpty { return met }
+        }
+        return baseCommit
+    }
+
     /// Everything that differs from `base`: commits on the branch, staged and
     /// unstaged changes, and untracked files.
     func changedFiles(in worktree: String, base: String) async throws -> [DiffFile] {

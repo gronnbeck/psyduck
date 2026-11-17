@@ -23,7 +23,9 @@ so this project's Claude session is a bare `claude`, not kekkai.
   main or master. **Rename** (row or "…" menu) changes the name and the
   branch together (`Workspace.branchName(for:)`: `psyduck/<name>`, or the name
   itself if it has a slash); the folder never moves, because claude finds its
-  session by path. Refused while claude runs or a pull request is open. The diff panel compares against the commit recorded at creation.
+  session by path. Refused while claude runs or a pull request is open. The diff panel compares against where the branch and its base
+  branch upstream last met (`Git.diffBase`), as a pull request does, so merging
+  or rebasing the base in doesn't list other people's work as changes.
 - **Archive** (hover a sidebar row, or the context menu) is a soft delete:
   stops claude, saves uncommitted work as a commit under
   `refs/psyduck/archive/<id>` (branch untouched), removes the worktree and

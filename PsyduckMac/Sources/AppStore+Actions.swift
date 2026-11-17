@@ -15,7 +15,7 @@ extension AppStore {
     func refreshBranch(_ id: UUID, network: Bool) async {
         guard let workspace = workspaces.first(where: { $0.id == id }) else { return }
         let state = await settings.git.branchState(
-            worktree: workspace.path, base: workspace.baseCommit, branch: workspace.branch,
+            worktree: workspace.path, base: await diffBase(workspace), branch: workspace.branch,
             gh: ghPath, network: network, previousPR: branches[id]?.pr)
         branches[id] = state
     }
@@ -157,8 +157,9 @@ extension AppStore {
 
     private func pullRequestText(for workspace: Workspace) async -> (String, String) {
         let git = settings.git
-        let log = (try? await git.output(["log", "--format=%s%n%b", "\(workspace.baseCommit)..HEAD"], in: workspace.path)) ?? ""
-        let diff = (try? await git.output(["diff", "\(workspace.baseCommit)...HEAD"], in: workspace.path)) ?? ""
+        let base = await diffBase(workspace)
+        let log = (try? await git.output(["log", "--no-merges", "--format=%s%n%b", "\(base)..HEAD"], in: workspace.path)) ?? ""
+        let diff = (try? await git.output(["diff", "\(base)...HEAD"], in: workspace.path)) ?? ""
         let prompt = """
         Write a GitHub pull request for this branch. Output the title on the first line \
         (under 72 characters, no prefix like "Title:"), then a blank line, then a concise markdown \

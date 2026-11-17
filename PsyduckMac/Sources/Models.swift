@@ -34,8 +34,9 @@ struct Workspace: Codable, Identifiable, Hashable {
     var path: String
     /// What the branch was cut from, e.g. `main` or `origin/main`.
     var baseRef: String
-    /// The exact commit `baseRef` pointed at when the workspace was made — the
-    /// diff panel compares against this, so it shows only this workspace's work.
+    /// The exact commit `baseRef` pointed at when the workspace was made. The
+    /// diff panel compares against where the branch and `baseRef` last met
+    /// (`Git.diffBase`), and falls back to this.
     var baseCommit: String
     /// claude's own session id, from the last turn. Passed back with
     /// `--resume` so the conversation continues.

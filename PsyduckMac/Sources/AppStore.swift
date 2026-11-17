@@ -394,10 +394,15 @@ final class AppStore: ObservableObject {
 
     // MARK: - Changes
 
+    /// The commit a workspace's changes are compared against.
+    func diffBase(_ workspace: Workspace) async -> String {
+        await settings.git.diffBase(in: workspace.path, baseRef: workspace.baseRef, baseCommit: workspace.baseCommit)
+    }
+
     func refreshChanges(_ id: UUID) async {
         guard let workspace = workspaces.first(where: { $0.id == id }) else { return }
         do {
-            let files = try await settings.git.changedFiles(in: workspace.path, base: workspace.baseCommit)
+            let files = try await settings.git.changedFiles(in: workspace.path, base: await diffBase(workspace))
             changes[id] = files
             if let open = openDiff[id], !files.contains(where: { $0.path == open.path }) {
                 openDiff[id] = nil

@@ -53,7 +53,7 @@ struct DiffView: View {
 
     private func load() async {
         do {
-            let text = try await store.settings.git.diff(of: file, in: workspace.path, base: workspace.baseCommit)
+            let text = try await store.settings.git.diff(of: file, in: workspace.path, base: await store.diffBase(workspace))
             // git's file headers repeat what the title bar already says.
             lines = Git.parseDiff(text).filter { $0.kind != .header }
             error = nil

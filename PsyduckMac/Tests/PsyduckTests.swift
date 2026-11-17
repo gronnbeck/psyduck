@@ -140,6 +140,36 @@ final class WorktreeTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: dir + "/local.txt"))
     }
 
+    /// Merging the base branch in must not list upstream's files as changes.
+    func testChangesAreMeasuredFromWhereTheBranchMetItsBase() async throws {
+        let seed = root.appendingPathComponent("repo").path
+        let origin = root.appendingPathComponent("origin.git").path
+        let clone = root.appendingPathComponent("clone").path
+        try await git.output(["clone", "--bare", seed, origin], in: root.path)
+        try await git.output(["clone", origin, clone], in: root.path)
+        let dir = root.appendingPathComponent("ws/teal").path
+        let commit = try await git.addWorktree(repo: clone, directory: dir, branch: "psyduck/teal", baseRef: "origin/main")
+        for args in [["config", "user.email", "t@example.com"], ["config", "user.name", "t"]] {
+            try await git.output(args, in: dir)
+        }
+        try "mine\n".write(toFile: dir + "/mine.txt", atomically: true, encoding: .utf8)
+        try await git.output(["add", "."], in: dir)
+        try await git.output(["commit", "-m", "mine"], in: dir)
+
+        try "upstream\n".write(toFile: seed + "/upstream.txt", atomically: true, encoding: .utf8)
+        try await git.output(["add", "."], in: seed)
+        try await git.output(["commit", "-m", "upstream"], in: seed)
+        try await git.output(["push", origin, "main"], in: seed)
+        try await git.output(["fetch", "origin"], in: dir)
+        try await git.output(["merge", "--no-edit", "origin/main"], in: dir)
+
+        let stale = try await git.changedFiles(in: dir, base: commit)
+        XCTAssertEqual(stale.map(\.path), ["mine.txt", "upstream.txt"])
+        let base = await git.diffBase(in: dir, baseRef: "origin/main", baseCommit: commit)
+        let files = try await git.changedFiles(in: dir, base: base)
+        XCTAssertEqual(files.map(\.path), ["mine.txt"])
+    }
+
     /// `git remote add` records no origin/HEAD; the remote is asked.
     func testFindsTheDefaultBranchWhenOriginHeadIsNotRecorded() async throws {
         let seed = root.appendingPathComponent("repo").path
