@@ -45,7 +45,29 @@ so this project's Claude session is a bare `claude`, not kekkai.
   holds every token; dark and light both follow the system appearance. Fonts:
   Inter (UI), Bricolage Grotesque (display), JetBrains Mono (code), all bundled.
 
+- **Two apps in one window.** A rail on the left edge (`RootView`, `AppMode`)
+  switches between **code** (workspaces, the original psyduck) and **desk**
+  (pull requests and claude reviews, which was the separate tsukue app; it is
+  called desk everywhere in psyduck). ⌘1 and ⌘2 switch. The two share the
+  window, `Shell`, the fonts and the updater, and nothing else: each has its
+  own stores, sidebar and settings page. Desk goes to GitHub and starts
+  background reviews only once it has been opened in a session.
+- **Desk's code lives in `PsyduckMac/Sources/Desk`**, with its own tokens
+  (`Ink`, the same Tinker values as `Tk`), settings (`DeskSettings`, keys
+  under `desk.`) and data (`desk/` inside psyduck's Application Support
+  folder). `TsukueImport` copies tsukue's data and settings over once.
+- **Desk's rules for GitHub:** claude never writes to GitHub; review agents
+  get read-only tools (`ReviewStore.readTools`, `ReviewStore.readOnly`, never
+  in the user-editable prompt template). Desk itself writes in exactly two
+  places, both only on a button press: `PRStore.approve` (`gh pr review
+  --approve`, after checking the head commit is the one shown; approve-all is
+  the same call per PR) and `DraftStore.post` (one review POST with the draft
+  the user edited). Don't add a third. `review-history.jsonl` is append only.
+- **Desk's microcopy** is lowercase, no exclamation marks, "→" arrows, mono
+  for numbers. The reviewer's name (`DeskSettings.agent`) is UI only.
+
 ## Code map (`PsyduckMac/Sources`)
+- `RootView` — the mode rail and which app is showing.
 - `AppStore` — repos, workspaces, persistence (`state.json` in Application
   Support, per bundle id), the chat runner, changed files.
 - `Git` — worktrees, changed files, unified diff parsing.
@@ -54,6 +76,17 @@ so this project's Claude session is a bare `claude`, not kekkai.
   Finder-launched app has neither).
 - Views: `ShellView` (layout), `SidebarView`, `ChatView`, `ChangesPanel`,
   `DiffView`, `SettingsView`.
+
+`PsyduckMac/Sources/Desk`:
+- `PRStore`, `PullRequest` — the PR lists (`GhPullRequests`: one GraphQL
+  query, or `ClaudePullRequests`), approving.
+- `Review`, `ReviewAgents` — `ReviewStore` runs a team of read-only claude
+  processes per review: first pass and specialists, one agent per focus, then
+  a checker per file. `AgentLimiter` caps them. Results in `reviews.json`.
+- `Draft`, `DraftView` — a finished review turned into a GitHub review the
+  user edits and posts. `drafts.json`, `review-history.jsonl`.
+- Views: `DeskView` (layout, sidebar, lists), `PRDetailView`,
+  `DeskSettingsPane`, `DeskComponents`, `DeskProse`, `DeskTheme`.
 
 ## Commands
 ```sh
@@ -66,6 +99,14 @@ TEST_RUNNER_PSYDUCK_LIVE_CLAUDE=1 xcodebuild test -scheme Psyduck -destination '
 # Render the window to PNGs (no Screen Recording needed), from a state.json
 TEST_RUNNER_PSYDUCK_RENDER_DIR=/tmp/screens TEST_RUNNER_PSYDUCK_RENDER_STATE=/path/state.json \
   xcodebuild test -scheme Psyduck -destination 'platform=macOS' -only-testing:PsyduckTests/ScreenRenderTests
+
+# Render desk's screens with sample data
+TEST_RUNNER_PSYDUCK_DESK_RENDER_DIR=/tmp/desk xcodebuild test -scheme Psyduck \
+  -destination 'platform=macOS' -only-testing:PsyduckTests/DeskScreenRenderTests
+
+# A real desk review through claude against a real PR (slow, billed)
+TEST_RUNNER_PSYDUCK_DESK_LIVE_REVIEW='owner/repo#4' xcodebuild test -scheme Psyduck \
+  -destination 'platform=macOS' -only-testing:PsyduckTests/LiveReviewTests
 ```
 
 ## Conventions

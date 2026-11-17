@@ -11,8 +11,9 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // The traffic lights sit in this row, so the wordmark starts after them.
-            PaneHeader(leading: 80) {
+            // The traffic lights sit over the mode rail and reach a little into
+            // this row, so the wordmark starts after them.
+            PaneHeader(leading: 24) {
                 HStack(spacing: 0) {
                     Text("psyduck").font(.display(22)).tracking(-0.4)
                     Text(".").font(.display(22)).foregroundStyle(Tk.brand)
