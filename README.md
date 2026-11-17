@@ -47,6 +47,18 @@ xcodebuild -scheme Psyduck -destination 'platform=macOS' test
 
 Local builds are ad-hoc signed and have no update feed, so Sparkle stays off.
 
+### The CLI
+
+The `psyduck` command line is a Swift package at the repo root. It builds on
+macOS and Linux.
+
+```sh
+swift build && swift test
+swift run psyduck host create dev --dry-run   # prints the aws commands, runs none
+```
+
+`psyduck host` sets up EC2 machines to run psyduck on. See `docs/EC2.md`.
+
 ## Layout
 
 | Path | What |
@@ -59,6 +71,8 @@ Local builds are ad-hoc signed and have no update feed, so Sparkle stays off.
 | `docs/REMOTE.md` | Plan: run agents on a remote machine (psyduckd + CLI) |
 | `docs/EC2.md` | Spec: bootstrap a Linux EC2 host for psyduck from your Mac |
 | `scripts/bootstrap-host.sh` | Run on a Linux machine to set it up for psyduck (git, gh, claude, logins) |
+| `Package.swift`, `Sources/PsyduckHost`, `Sources/psyduck` | The `psyduck` CLI. For now only `psyduck host …`, the EC2 bootstrapper |
+| `.github/workflows/swiftpm.yml` | Build and test the Swift packages on Linux |
 
 ## License
 
