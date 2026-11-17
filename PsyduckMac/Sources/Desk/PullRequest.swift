@@ -1,4 +1,5 @@
 import Foundation
+import PsyduckCore
 
 struct DeskPullRequest: Identifiable, Hashable, Codable {
     enum Checks: String, Codable { case passing, failing, pending, none }

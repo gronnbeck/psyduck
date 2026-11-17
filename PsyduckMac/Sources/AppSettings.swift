@@ -1,4 +1,5 @@
 import Foundation
+import PsyduckCore
 
 /// User preferences, kept in UserDefaults (per bundle id, so edge and local
 /// builds don't share them).
@@ -23,8 +24,8 @@ final class AppSettings: ObservableObject {
         ("plan", "Plan: read only, no changes"),
     ]
 
-    static var defaultWorkspacesRoot: String { "~/psyduck/workspaces" }
-    static var defaultReposRoot: String { "~/psyduck/repos" }
+    static var defaultWorkspacesRoot: String { EngineConfig.defaultWorkspacesRoot }
+    static var defaultReposRoot: String { EngineConfig.defaultReposRoot }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -32,20 +33,17 @@ final class AppSettings: ObservableObject {
         gitPath = defaults.string(forKey: "gitPath") ?? ""
         workspacesRoot = defaults.string(forKey: "workspacesRoot") ?? Self.defaultWorkspacesRoot
         reposRoot = defaults.string(forKey: "reposRoot") ?? Self.defaultReposRoot
-        permissionMode = defaults.string(forKey: "permissionMode") ?? "bypassPermissions"
+        permissionMode = defaults.string(forKey: "permissionMode") ?? EngineConfig.defaultPermissionMode
         model = defaults.string(forKey: "model") ?? ""
     }
 
-    func resolvedClaude() throws -> String { try Shell.resolve("claude", configured: claudePath) }
-
-    func resolvedGit() -> String {
-        (try? Shell.resolve("git", configured: gitPath)) ?? "/usr/bin/git"
+    /// The settings as the engine takes them.
+    var config: EngineConfig {
+        EngineConfig(claudePath: claudePath, gitPath: gitPath, workspacesRoot: workspacesRoot,
+                     reposRoot: reposRoot, permissionMode: permissionMode, model: model)
     }
 
-    var git: Git { Git(gitPath: resolvedGit()) }
-
-    var expandedWorkspacesRoot: String { (workspacesRoot as NSString).expandingTildeInPath }
-    var expandedReposRoot: String { (reposRoot as NSString).expandingTildeInPath }
+    func resolvedClaude() throws -> String { try config.resolvedClaude() }
 
     /// Fills in the claude path on first launch, so it shows in settings.
     func detectMissing() async {

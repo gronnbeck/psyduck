@@ -1,4 +1,5 @@
 import AppKit
+import PsyduckCore
 import SwiftUI
 
 /// The window, laid out as the Tinker design: workspaces on the left, the

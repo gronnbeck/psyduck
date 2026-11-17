@@ -1,4 +1,5 @@
 import AppKit
+import PsyduckCore
 import SwiftUI
 import XCTest
 @testable import Psyduck
@@ -17,7 +18,18 @@ final class ScreenRenderTests: XCTestCase {
 
         let settings = AppSettings(defaults: UserDefaults(suiteName: "psyduck-render-\(UUID())")!)
         settings.gitPath = "/usr/bin/git"
-        let store = AppStore(settings: settings, stateURL: URL(fileURLWithPath: statePath))
+        // Loading can rewrite the file (an old state.json is migrated to event
+        // logs), so work on a copy.
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("psyduck-render-\(UUID())")
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let stateURL = scratch.appendingPathComponent("state.json")
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: statePath), to: stateURL)
+        let events = URL(fileURLWithPath: statePath).deletingLastPathComponent().appendingPathComponent("events")
+        if FileManager.default.fileExists(atPath: events.path) {
+            try FileManager.default.copyItem(at: events, to: scratch.appendingPathComponent("events"))
+        }
+        let store = AppStore(settings: settings, stateURL: stateURL)
         let updater = UpdaterModel()
         let workspace = try XCTUnwrap(store.selectedWorkspace)
         await store.refreshChanges(workspace.id)

@@ -1,3 +1,4 @@
+import PsyduckCore
 import SwiftUI
 
 /// The right-hand panel: the branch's next step (top right), every file the

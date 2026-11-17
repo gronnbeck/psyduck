@@ -1,3 +1,4 @@
+import PsyduckCore
 import SwiftUI
 
 /// One workspace's session with Claude: header, transcript, composer.
@@ -7,7 +8,9 @@ struct ChatView: View {
     @State private var draft = ""
     @FocusState private var focused: Bool
 
-    private var running: Bool { store.isRunning(workspace.id) }
+    private var session: Transcript { store.transcript(workspace.id) }
+    private var items: [ChatItem] { session.items }
+    private var running: Bool { session.running }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -58,7 +61,7 @@ struct ChatView: View {
 
     /// "Agent is poking at user.rb…" — from the last tool call of this turn.
     private var activity: String {
-        guard let last = workspace.items.last, last.kind == .tool else { return "Agent is thinking…" }
+        guard let last = items.last, last.kind == .tool else { return "Agent is thinking…" }
         if let path = last.filePath { return "Agent is poking at \((path as NSString).lastPathComponent)…" }
         if last.isShell, let command = last.detail?.split(separator: " ").first { return "Agent is running \(command)…" }
         return "Agent is working…"
@@ -76,8 +79,9 @@ struct ChatView: View {
         func openReply() {
             if !inReply { rows.append(.claude(turn)); inReply = true }
         }
-        let lastID = running ? workspace.items.last?.id : nil
-        for item in workspace.items {
+        let items = self.items
+        let lastID = running ? items.last?.id : nil
+        for item in items {
             if item.kind == .user {
                 rows.append(.user(item))
                 inReply = false
@@ -88,16 +92,16 @@ struct ChatView: View {
             }
         }
         if running {
-            let partial = store.streaming[workspace.id] ?? ""
+            let partial = session.streaming
             if !partial.isEmpty {
                 openReply()
                 rows.append(.partial(partial))
-            } else if !inReply || workspace.items.last?.kind != .tool {
+            } else if !inReply || items.last?.kind != .tool {
                 openReply()
                 rows.append(.thinking)
             }
         }
-        if let queued = store.queued[workspace.id] { rows.append(.queued(queued)) }
+        if let queued = session.queued { rows.append(.queued(queued)) }
         return rows
     }
 
@@ -105,7 +109,7 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    if workspace.items.isEmpty {
+                    if items.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("New workspace").font(.display(22))
                             Text("Claude works in its own copy of \(workspace.baseRef), on \(workspace.branch):")
@@ -128,8 +132,8 @@ struct ChatView: View {
             // Pinned to the bottom, so a block above the fold changing height
             // doesn't shove what you're reading around.
             .defaultScrollAnchor(.bottom)
-            .onChange(of: workspace.items.count) { proxy.scrollTo("bottom", anchor: .bottom) }
-            .onChange(of: store.streaming[workspace.id]) { proxy.scrollTo("bottom", anchor: .bottom) }
+            .onChange(of: items.count) { proxy.scrollTo("bottom", anchor: .bottom) }
+            .onChange(of: session.streaming) { proxy.scrollTo("bottom", anchor: .bottom) }
             .task {
                 // A lazy stack only guesses its height at first, and can open
                 // scrolled past its rows. Go to the end once it has settled.
@@ -163,13 +167,13 @@ struct ChatView: View {
                 }
                 .onSubmit(send)
             HStack(spacing: 8) {
-                if running, let started = store.turnStarted[workspace.id] {
+                if running, let started = session.turnStarted {
                     TimelineView(.periodic(from: started, by: 0.1)) { context in
                         Text(String(format: "%.1fs", context.date.timeIntervalSince(started)))
                     }
                     .font(.mono(12))
                     .foregroundStyle(Tk.inkFaint)
-                    if store.queued[workspace.id] != nil {
+                    if session.queued != nil {
                         Text("· follow-up queued").font(.sans(12)).foregroundStyle(Tk.inkFaint)
                     }
                 } else {

@@ -1,4 +1,5 @@
 import Foundation
+import PsyduckCore
 
 @MainActor
 final class PRStore: ObservableObject {

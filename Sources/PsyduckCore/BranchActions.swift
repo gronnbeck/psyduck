@@ -1,32 +1,50 @@
 import Foundation
 
 /// The workspace's pull request, from `gh pr view --json`.
-struct PullRequest: Codable, Hashable {
-    var number: Int
-    var url: String
+public struct PullRequest: Codable, Hashable, Sendable {
+    public var number: Int
+    public var url: String
     /// OPEN, MERGED or CLOSED.
-    var state: String
-    var isDraft: Bool
+    public var state: String
+    public var isDraft: Bool
+
+    public init(number: Int, url: String, state: String, isDraft: Bool) {
+        self.number = number
+        self.url = url
+        self.state = state
+        self.isDraft = isDraft
+    }
 }
 
 /// Where a workspace's branch stands against its remote and its PR.
-struct BranchState: Hashable {
+public struct BranchState: Codable, Hashable, Sendable {
     /// Uncommitted changes, staged or not, including untracked files.
-    var dirty = false
-    var hasRemote = false
-    var hasUpstream = false
+    public var dirty = false
+    public var hasRemote = false
+    public var hasUpstream = false
     /// Commits the upstream doesn't have.
-    var ahead = 0
+    public var ahead = 0
     /// Commits the upstream has that we don't.
-    var behind = 0
+    public var behind = 0
     /// Commits on the branch since the workspace was cut.
-    var commitsSinceBase = 0
-    var pr: PullRequest?
+    public var commitsSinceBase = 0
+    public var pr: PullRequest?
+
+    public init(dirty: Bool = false, hasRemote: Bool = false, hasUpstream: Bool = false, ahead: Int = 0,
+                behind: Int = 0, commitsSinceBase: Int = 0, pr: PullRequest? = nil) {
+        self.dirty = dirty
+        self.hasRemote = hasRemote
+        self.hasUpstream = hasUpstream
+        self.ahead = ahead
+        self.behind = behind
+        self.commitsSinceBase = commitsSinceBase
+        self.pr = pr
+    }
 }
 
 /// The one thing the header button offers: the next step for this branch.
 /// More will join later, so it is an enum the view switches on, not a bool.
-enum PrimaryAction: Equatable {
+public enum PrimaryAction: Equatable, Sendable {
     case pull
     case commit
     case commitAndPush
@@ -37,7 +55,7 @@ enum PrimaryAction: Equatable {
     case merged(PullRequest)
     case none
 
-    var title: String {
+    public var title: String {
         switch self {
         case .pull: return "Pull"
         case .commit: return "Commit"
@@ -51,7 +69,7 @@ enum PrimaryAction: Equatable {
         }
     }
 
-    var help: String {
+    public var help: String {
         switch self {
         case .pull: return "the remote branch has commits you don't — pull them in (rebase, autostash)"
         case .commit: return "commit every change (no remote to push to)"
@@ -67,7 +85,7 @@ enum PrimaryAction: Equatable {
 
     /// Picks the next step. Order matters: catch up with the remote before
     /// anything else, then get local work committed and pushed, then the PR.
-    static func decide(_ state: BranchState) -> PrimaryAction {
+    public static func decide(_ state: BranchState) -> PrimaryAction {
         if let pr = state.pr, pr.state == "MERGED" { return .merged(pr) }
         if state.hasRemote && state.behind > 0 { return .pull }
         if state.dirty {
@@ -89,7 +107,7 @@ enum PrimaryAction: Equatable {
 extension Git {
     /// Reads the branch's state. `network` also fetches the branch and asks
     /// GitHub about its PR — slower, so the caller does it less often.
-    func branchState(worktree: String, base: String, branch: String,
+    public func branchState(worktree: String, base: String, branch: String,
                      gh: String?, network: Bool, previousPR: PullRequest?) async -> BranchState {
         var state = BranchState()
         state.dirty = !((try? await output(["status", "--porcelain"], in: worktree)) ?? "").isEmpty
@@ -124,7 +142,7 @@ extension Git {
 extension PrimaryAction {
     /// Actions that change files or history in the worktree — held back
     /// while Claude is editing it.
-    var touchesWorkTree: Bool {
+    public var touchesWorkTree: Bool {
         switch self {
         case .pull, .commit, .commitAndPush, .createPR: return true
         default: return false

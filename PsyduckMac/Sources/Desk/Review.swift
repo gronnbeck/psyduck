@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import PsyduckCore
 
 struct CodeLine: Codable, Hashable {
     let no: Int

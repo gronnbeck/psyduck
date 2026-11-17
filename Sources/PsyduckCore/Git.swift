@@ -1,9 +1,9 @@
 import Foundation
 
-enum GitError: LocalizedError {
+public enum GitError: LocalizedError {
     case failed(String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .failed(let message): return message
         }
@@ -11,48 +11,65 @@ enum GitError: LocalizedError {
 }
 
 /// A file that differs between a workspace and the commit it started from.
-struct DiffFile: Identifiable, Hashable {
-    enum Status: String {
+public struct DiffFile: Identifiable, Hashable, Codable, Sendable {
+    public enum Status: String, Codable, Sendable {
         case added = "A", modified = "M", deleted = "D", untracked = "?", other = "~"
     }
 
-    var path: String
-    var status: Status
+    public var path: String
+    public var status: Status
     /// Nil for binary files.
-    var additions: Int?
-    var deletions: Int?
+    public var additions: Int?
+    public var deletions: Int?
 
-    var id: String { path }
+    public init(path: String, status: Status, additions: Int? = nil, deletions: Int? = nil) {
+        self.path = path
+        self.status = status
+        self.additions = additions
+        self.deletions = deletions
+    }
 
-    var fileName: String { (path as NSString).lastPathComponent }
-    var directory: String {
+    public var id: String { path }
+
+    public var fileName: String { (path as NSString).lastPathComponent }
+    public var directory: String {
         let dir = (path as NSString).deletingLastPathComponent
         return dir.isEmpty ? "" : dir + "/"
     }
 }
 
 /// One rendered line of a unified diff.
-struct DiffLine: Identifiable, Hashable {
-    enum Kind { case header, hunk, context, added, removed }
+public struct DiffLine: Identifiable, Hashable, Sendable {
+    public enum Kind: Sendable { case header, hunk, context, added, removed }
 
-    var id: Int
-    var kind: Kind
-    var text: String
-    var oldNumber: Int?
-    var newNumber: Int?
+    public var id: Int
+    public var kind: Kind
+    public var text: String
+    public var oldNumber: Int?
+    public var newNumber: Int?
+
+    public init(id: Int, kind: Kind, text: String, oldNumber: Int? = nil, newNumber: Int? = nil) {
+        self.id = id
+        self.kind = kind
+        self.text = text
+        self.oldNumber = oldNumber
+        self.newNumber = newNumber
+    }
 }
 
 /// Every git operation psyduck does, run through the git CLI.
-struct Git {
-    var gitPath: String
+public struct Git: Sendable {
+    public var gitPath: String
 
-    func run(_ arguments: [String], in directory: String) async throws -> CommandResult {
+    public init(gitPath: String) { self.gitPath = gitPath }
+
+    public func run(_ arguments: [String], in directory: String) async throws -> CommandResult {
         try await Shell.run(gitPath, arguments, directory: URL(fileURLWithPath: directory))
     }
 
     /// Runs and returns trimmed stdout, or throws git's own complaint.
     @discardableResult
-    func output(_ arguments: [String], in directory: String) async throws -> String {
+    public func output(_ arguments: [String], in directory: String) async throws -> String {
         let result = try await run(arguments, in: directory)
         guard result.ok else { throw GitError.failed(result.failureLine) }
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -61,7 +78,7 @@ struct Git {
     // MARK: - Repos
 
     /// The top-level directory of the repo containing `path`.
-    func topLevel(of path: String) async throws -> String {
+    public func topLevel(of path: String) async throws -> String {
         do {
             return try await output(["rev-parse", "--show-toplevel"], in: path)
         } catch {
@@ -69,7 +86,7 @@ struct Git {
         }
     }
 
-    func clone(_ url: String, into directory: String) async throws {
+    public func clone(_ url: String, into directory: String) async throws {
         let parent = (directory as NSString).deletingLastPathComponent
         try FileManager.default.createDirectory(atPath: parent, withIntermediateDirectories: true)
         try await output(["clone", url, directory], in: parent)
@@ -82,7 +99,7 @@ struct Git {
     ///
     /// Offline, the last fetched `origin/<branch>` is used. Only a repo with
     /// no `origin` falls back to a local branch.
-    func defaultBaseRef(repo: String) async -> String {
+    public func defaultBaseRef(repo: String) async -> String {
         guard (try? await output(["remote", "get-url", "origin"], in: repo)) != nil else {
             for candidate in ["main", "master"] where await branchExists(candidate, repo: repo) {
                 return candidate
@@ -120,7 +137,7 @@ struct Git {
         (try? await output(["rev-parse", "--verify", "--quiet", "refs/remotes/origin/\(branch)"], in: repo)) != nil
     }
 
-    func branchExists(_ branch: String, repo: String) async -> Bool {
+    public func branchExists(_ branch: String, repo: String) async -> Bool {
         (try? await output(["rev-parse", "--verify", "--quiet", "refs/heads/\(branch)"], in: repo)) != nil
     }
 
@@ -128,7 +145,7 @@ struct Git {
     /// was pushed, the link to the old remote branch is dropped, so the next
     /// push makes a remote branch with the new name. The old one stays on
     /// the remote.
-    func renameBranch(_ old: String, to new: String, repo: String) async throws {
+    public func renameBranch(_ old: String, to new: String, repo: String) async throws {
         try await output(["branch", "-m", old, new], in: repo)
         _ = try? await output(["branch", "--unset-upstream", new], in: repo)
     }
@@ -137,7 +154,7 @@ struct Git {
 
     /// Cuts `branch` from `baseRef` into a new worktree at `directory`, and
     /// returns the commit it started from.
-    func addWorktree(repo: String, directory: String, branch: String, baseRef: String) async throws -> String {
+    public func addWorktree(repo: String, directory: String, branch: String, baseRef: String) async throws -> String {
         let commit = try await output(["rev-parse", "--verify", "\(baseRef)^{commit}"], in: repo)
         try FileManager.default.createDirectory(atPath: (directory as NSString).deletingLastPathComponent,
                                                 withIntermediateDirectories: true)
@@ -148,7 +165,7 @@ struct Git {
     /// Saves a worktree's uncommitted work, untracked files included, as a
     /// commit on top of HEAD kept under `ref`, without moving the branch.
     /// Returns nil when there's nothing to keep.
-    func snapshotWork(in worktree: String, ref: String) async throws -> String? {
+    public func snapshotWork(in worktree: String, ref: String) async throws -> String? {
         guard try await !output(["status", "--porcelain"], in: worktree).isEmpty else { return nil }
         try await output(["add", "-A"], in: worktree)
         let tree = try await output(["write-tree"], in: worktree)
@@ -158,7 +175,7 @@ struct Git {
     }
 
     /// Removes the worktree directory. The branch stays, so no work is lost.
-    func removeWorktree(repo: String, directory: String) async throws {
+    public func removeWorktree(repo: String, directory: String) async throws {
         try await output(["worktree", "remove", "--force", directory], in: repo)
     }
 
@@ -170,7 +187,7 @@ struct Git {
     /// falls behind as soon as the base branch is merged or rebased in, and
     /// comparing against it then lists everyone else's work as this
     /// workspace's.
-    func diffBase(in worktree: String, baseRef: String, baseCommit: String) async -> String {
+    public func diffBase(in worktree: String, baseRef: String, baseCommit: String) async -> String {
         let name = baseRef.hasPrefix("origin/") ? String(baseRef.dropFirst(7)) : baseRef
         for ref in ["refs/remotes/origin/\(name)", baseRef] {
             if let met = try? await output(["merge-base", "HEAD", ref], in: worktree), !met.isEmpty { return met }
@@ -180,14 +197,14 @@ struct Git {
 
     /// Everything that differs from `base`: commits on the branch, staged and
     /// unstaged changes, and untracked files.
-    func changedFiles(in worktree: String, base: String) async throws -> [DiffFile] {
+    public func changedFiles(in worktree: String, base: String) async throws -> [DiffFile] {
         let numstat = try await output(["diff", "--no-renames", "--numstat", base], in: worktree)
         let nameStatus = try await output(["diff", "--no-renames", "--name-status", base], in: worktree)
         let untracked = try await output(["ls-files", "--others", "--exclude-standard"], in: worktree)
         return Self.parseChangedFiles(numstat: numstat, nameStatus: nameStatus, untracked: untracked)
     }
 
-    static func parseChangedFiles(numstat: String, nameStatus: String, untracked: String) -> [DiffFile] {
+    public static func parseChangedFiles(numstat: String, nameStatus: String, untracked: String) -> [DiffFile] {
         var statuses: [String: DiffFile.Status] = [:]
         for line in nameStatus.split(separator: "\n") {
             let parts = line.split(separator: "\t", maxSplits: 1)
@@ -211,7 +228,7 @@ struct Git {
 
     /// The unified diff for one file against `base`. Untracked files are
     /// diffed against nothing, so they read as all-new.
-    func diff(of file: DiffFile, in worktree: String, base: String) async throws -> String {
+    public func diff(of file: DiffFile, in worktree: String, base: String) async throws -> String {
         let arguments: [String]
         if file.status == .untracked {
             arguments = ["diff", "--no-index", "--", "/dev/null", file.path]
@@ -224,7 +241,7 @@ struct Git {
         return result.stdout
     }
 
-    static func parseDiff(_ text: String) -> [DiffLine] {
+    public static func parseDiff(_ text: String) -> [DiffLine] {
         var lines: [DiffLine] = []
         var old = 0
         var new = 0

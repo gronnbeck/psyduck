@@ -1,3 +1,4 @@
+import PsyduckCore
 import XCTest
 @testable import Psyduck
 

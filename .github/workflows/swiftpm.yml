@@ -1,0 +1,45 @@
+name: SwiftPM
+
+# Builds and tests the Swift packages (core, CLI) on Linux. No secrets.
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "Package.swift"
+      - "Package.resolved"
+      - "Sources/**"
+      - "Tests/**"
+      - ".github/workflows/swiftpm.yml"
+  pull_request:
+    paths:
+      - "Package.swift"
+      - "Package.resolved"
+      - "Sources/**"
+      - "Tests/**"
+      - ".github/workflows/swiftpm.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: psyduck-swiftpm-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Build and test (Linux)
+    runs-on: ubuntu-latest
+    container: swift:6.2-noble
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and test
+        run: |
+          set -e
+          git config --global user.email "ci@example.com"
+          git config --global user.name "ci"
+          swift build
+          swift test

@@ -1,4 +1,5 @@
 import Foundation
+import PsyduckCore
 import SwiftUI
 
 /// Which tool finds the pull requests.

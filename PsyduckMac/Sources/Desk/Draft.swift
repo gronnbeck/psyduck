@@ -1,4 +1,5 @@
 import Foundation
+import PsyduckCore
 
 /// A line comment in a review you're about to post. It starts as one of
 /// claude's comments, pinned to a line GitHub will accept.

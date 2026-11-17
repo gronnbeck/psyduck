@@ -1,3 +1,4 @@
+import PsyduckCore
 import SwiftUI
 
 /// Settings, as a page inside the main window. It takes over the session and
