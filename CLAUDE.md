@@ -17,8 +17,10 @@ so this project's Claude session is a bare `claude`, not kekkai.
   stream-json --include-partial-messages`, prompt on stdin, `--resume` per
   turn), never the API directly. All git is the git CLI via `Shell`.
 - **Workspaces** are `git worktree`s at `~/psyduck/workspaces/<repo>/<name>`
-  on branch `psyduck/<name>`, cut from the remote's default branch (local copy
-  preferred). The diff panel compares against the commit recorded at creation.
+  on branch `psyduck/<name>`, cut from `origin/<default branch>`, fetched
+  first (`Git.defaultBaseRef`): always upstream's main or master, never the
+  local copy or what is checked out. A repo with no `origin` uses its local
+  main or master. The diff panel compares against the commit recorded at creation.
 - **Archive** (hover a sidebar row, or the context menu) is a soft delete:
   stops claude, saves uncommitted work as a commit under
   `refs/psyduck/archive/<id>` (branch untouched), removes the worktree and

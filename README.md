@@ -13,8 +13,9 @@ Installed copies update themselves through Sparkle.
 
 - **Repos:** add a local git repo, or clone one from a URL.
 - **Workspaces:** each new workspace is a fresh `git worktree` on its own
-  `psyduck/<duck-name>` branch, cut from the repo's default branch. Your own
-  checkout is never touched.
+  `psyduck/<duck-name>` branch, cut from the default branch as it is upstream
+  (`origin/main` or `origin/master`, fetched first). Your own checkout is
+  never touched.
 - **Chat:** one claude session per workspace, running inside the worktree.
   Replies stream in, tool calls show as rows, and each turn resumes the same
   claude session (`--resume`).

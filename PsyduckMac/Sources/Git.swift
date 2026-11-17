@@ -75,24 +75,49 @@ struct Git {
         try await output(["clone", url, directory], in: parent)
     }
 
-    /// The branch new workspaces start from: the remote's default branch,
-    /// preferring the local copy of it when there is one, else whatever is
-    /// checked out.
+    /// Where new workspaces start: the remote's default branch as it is
+    /// upstream right now (`origin/main`, `origin/master`, …), fetched first.
+    /// Never the local copy of it and never whatever is checked out, which
+    /// can be behind or carry unpushed work.
+    ///
+    /// Offline, the last fetched `origin/<branch>` is used. Only a repo with
+    /// no `origin` falls back to a local branch.
     func defaultBaseRef(repo: String) async -> String {
-        if let remoteHead = try? await output(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], in: repo),
-           !remoteHead.isEmpty {
-            let local = remoteHead.replacingOccurrences(of: "origin/", with: "")
-            if (try? await output(["rev-parse", "--verify", "--quiet", "refs/heads/\(local)"], in: repo)) != nil {
-                return local
-            }
-            return remoteHead
-        }
-        for candidate in ["main", "master"] {
-            if (try? await output(["rev-parse", "--verify", "--quiet", "refs/heads/\(candidate)"], in: repo)) != nil {
+        guard (try? await output(["remote", "get-url", "origin"], in: repo)) != nil else {
+            for candidate in ["main", "master"] where await branchExists(candidate, repo: repo) {
                 return candidate
             }
+            return (try? await output(["rev-parse", "--abbrev-ref", "HEAD"], in: repo)) ?? "HEAD"
+        }
+
+        var branch = await remoteDefaultBranch(repo: repo)
+        if branch == nil {
+            // origin/HEAD isn't recorded (a repo made with `git remote add`,
+            // not `git clone`). Ask the remote which branch is its default.
+            _ = try? await output(["remote", "set-head", "origin", "--auto"], in: repo)
+            branch = await remoteDefaultBranch(repo: repo)
+        }
+        if let branch {
+            _ = try? await output(["fetch", "origin", branch], in: repo)
+            return "origin/\(branch)"
+        }
+        // The remote couldn't be asked. Take what has been fetched before.
+        _ = try? await output(["fetch", "origin"], in: repo)
+        for candidate in ["main", "master"] where await remoteBranchExists(candidate, repo: repo) {
+            return "origin/\(candidate)"
         }
         return (try? await output(["rev-parse", "--abbrev-ref", "HEAD"], in: repo)) ?? "HEAD"
+    }
+
+    /// The branch `origin/HEAD` points at, without `origin/`.
+    private func remoteDefaultBranch(repo: String) async -> String? {
+        guard let head = try? await output(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], in: repo),
+              head.hasPrefix("origin/"), head.count > 7 else { return nil }
+        return String(head.dropFirst(7))
+    }
+
+    private func remoteBranchExists(_ branch: String, repo: String) async -> Bool {
+        (try? await output(["rev-parse", "--verify", "--quiet", "refs/remotes/origin/\(branch)"], in: repo)) != nil
     }
 
     func branchExists(_ branch: String, repo: String) async -> Bool {

@@ -108,6 +108,50 @@ final class WorktreeTests: XCTestCase {
         try? FileManager.default.removeItem(at: root)
     }
 
+    /// A clone whose local main is behind origin, with something else
+    /// checked out: the workspace still starts from origin's newest commit.
+    func testNewWorkspacesStartFromTheRemoteDefaultBranch() async throws {
+        let seed = root.appendingPathComponent("repo").path
+        let origin = root.appendingPathComponent("origin.git").path
+        let clone = root.appendingPathComponent("clone").path
+        try await git.output(["clone", "--bare", seed, origin], in: root.path)
+        try await git.output(["clone", origin, clone], in: root.path)
+        for args in [["config", "user.email", "t@example.com"], ["config", "user.name", "t"],
+                     ["checkout", "-b", "my-feature"]] {
+            try await git.output(args, in: clone)
+        }
+        try "local only\n".write(toFile: clone + "/local.txt", atomically: true, encoding: .utf8)
+        try await git.output(["add", "."], in: clone)
+        try await git.output(["commit", "-m", "unpushed work"], in: clone)
+
+        // Someone else pushes to origin's main after the clone was made.
+        try "upstream\n".write(toFile: seed + "/upstream.txt", atomically: true, encoding: .utf8)
+        try await git.output(["add", "."], in: seed)
+        try await git.output(["commit", "-m", "upstream"], in: seed)
+        try await git.output(["push", origin, "main"], in: seed)
+        let upstream = try await git.output(["rev-parse", "HEAD"], in: seed)
+
+        let base = await git.defaultBaseRef(repo: clone)
+        XCTAssertEqual(base, "origin/main")
+        let dir = root.appendingPathComponent("ws/teal").path
+        let commit = try await git.addWorktree(repo: clone, directory: dir, branch: "psyduck/teal", baseRef: base)
+        XCTAssertEqual(commit, upstream)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dir + "/upstream.txt"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir + "/local.txt"))
+    }
+
+    /// `git remote add` records no origin/HEAD; the remote is asked.
+    func testFindsTheDefaultBranchWhenOriginHeadIsNotRecorded() async throws {
+        let seed = root.appendingPathComponent("repo").path
+        let origin = root.appendingPathComponent("origin.git").path
+        try await git.output(["clone", "--bare", seed, origin], in: root.path)
+        try await git.output(["remote", "add", "origin", origin], in: seed)
+        try await git.output(["checkout", "-b", "elsewhere"], in: seed)
+
+        let base = await git.defaultBaseRef(repo: seed)
+        XCTAssertEqual(base, "origin/main")
+    }
+
     func testWorktreeAndDiff() async throws {
         let repo = root.appendingPathComponent("repo").path
         let top = try await git.topLevel(of: repo)
