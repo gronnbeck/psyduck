@@ -140,15 +140,19 @@ final class ProcessRunnerTests: XCTestCase {
 }
 
 final class CloudInitTests: XCTestCase {
-    func testInstallsTheToolchain() {
+    func testRunsTheSetupScriptWithoutLogins() {
         let script = CloudInit().render()
         XCTAssertTrue(script.hasPrefix("#!/bin/bash\n"))
-        XCTAssertTrue(script.contains("apt-get install -y git build-essential curl unzip jq"))
-        XCTAssertTrue(script.contains("apt-get install -y gh"))
-        XCTAssertTrue(script.contains("https://claude.ai/install.sh"))
-        XCTAssertTrue(script.contains("loginctl enable-linger ubuntu"))
-        XCTAssertTrue(script.contains("/home/ubuntu/psyduck/repos /home/ubuntu/psyduck/workspaces"))
-        XCTAssertTrue(script.contains("install -d -m 700 /home/ubuntu/.config/psyduck"))
+        XCTAssertTrue(script.contains("https://raw.githubusercontent.com/gronnbeck/psyduck/main/scripts/bootstrap-host.sh -o /usr/local/bin/psyduck-bootstrap-host"))
+        XCTAssertTrue(script.contains("\n/usr/local/bin/psyduck-bootstrap-host --no-login --user ubuntu\n"))
+        // The install steps live in the script, not here.
+        XCTAssertFalse(script.contains("apt-get"))
+    }
+
+    func testTheScriptURLCanBeChanged() {
+        var cloudInit = CloudInit()
+        cloudInit.scriptURL = "https://example.com/setup.sh"
+        XCTAssertTrue(cloudInit.render().contains("https://example.com/setup.sh -o "))
     }
 
     func testHoldsNoSecrets() {

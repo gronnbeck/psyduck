@@ -159,20 +159,20 @@ public IP, which changes on every start, so `psyduck host start` rewrites it.
 
 ### cloud-init (no secrets)
 
-Runs as root on first boot:
+Runs as root on first boot. The install itself is
+[`scripts/bootstrap-host.sh`](../scripts/bootstrap-host.sh), the script
+described [above](#without-the-mac-side-the-bootstrap-script); the
+bootstrapper does not repeat its steps.
 
-1. **Packages:** `apt-get install git build-essential curl unzip jq`, plus
-   `gh` from GitHub's apt repository.
-2. **As `ubuntu`:**
-   - Install claude with the native installer (`curl -fsSL
-     https://claude.ai/install.sh | bash`), which puts it in `~/.local/bin`.
-   - Download `psyduck` and `psyduckd` for aarch64 from
-     `https://nplol-dist.hel1.your-objectstorage.com/psyduck/edge/linux/` and
-     check them against the published checksum.
-   - Run `psyduck install-service`, which writes the systemd user unit, then
-     `loginctl enable-linger ubuntu`.
-3. **Directories:** `~/psyduck/{repos,workspaces}` and
-   `~/.config/psyduck/` (mode 700).
+1. Download the script from the psyduck repository's `main` branch to
+   `/usr/local/bin/psyduck-bootstrap-host`.
+2. Run it with `--no-login --user ubuntu`: packages, gh, claude,
+   `~/psyduck/{repos,workspaces}`, `~/.config/psyduck/`, linger.
+3. Later, with `psyduckd`: download `psyduck` and `psyduckd` for the host's
+   architecture from
+   `https://nplol-dist.hel1.your-objectstorage.com/psyduck/edge/linux/`,
+   check them against the published checksum, and run
+   `psyduck install-service`.
 
 Until `psyduckd` ships (REMOTE.md phase 2), the bootstrapper skips the psyduck
 download (`CloudInit.installPsyduck` is off, and no flag turns it on yet). The
@@ -184,23 +184,16 @@ can be built alongside REMOTE.md.
 Credentials never go into user data, tags or the AMI. They're set up over
 the SSH session:
 
-- **claude:** `ssh -t psyduck-<name>` runs `claude setup-token` on the box.
-  It prints a long-lived token, and the same remote script then asks you to
-  paste it (not echoed) and writes it to `~/.config/psyduck/env` (mode 600) as
-  `CLAUDE_CODE_OAUTH_TOKEN`, which the systemd unit will load. All of that
-  runs on the box, so the token never reaches the Mac's shell history or
-  files.
-- **GitHub:**
-  - `ssh -t psyduck-<name>` runs `gh auth login`, which offers the browser
-    device flow or pasting a token, then `gh auth setup-git`, so git over
-    HTTPS uses gh's credentials.
+- **claude and GitHub:** `ssh -t psyduck-<name>` runs
+  `psyduck-bootstrap-host --login-only`, the setup script's guided logins.
+  Everything is typed on the box, so no token reaches the Mac's shell
+  history or files.
   - The bootstrapper does **not** copy the Mac's `gh auth token`. That token
     usually has broad scopes, and the box runs agents in
-    `bypassPermissions`.
-  - Using a fine-grained token limited to the repos you'll work on there is
-    recommended, and `login` says so.
+    `bypassPermissions`. The script recommends a fine-grained token limited
+    to the repos you'll work on there.
 - **git identity:** copy `user.name` and `user.email` from the Mac's global
-  git config.
+  git config. This runs first, so the script doesn't ask for them.
 
 ## IAM
 

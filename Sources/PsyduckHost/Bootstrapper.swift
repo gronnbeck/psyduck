@@ -390,44 +390,21 @@ public struct Bootstrapper {
         try login(record)
     }
 
-    static let claudeLoginScript = """
-        set -e
-        echo "Logging claude in on this host. Open the URL it prints and paste the code back."
-        "$HOME/.local/bin/claude" setup-token
-        echo
-        read -rsp "Paste the token printed above, to save it for psyduckd (Enter skips): " token
-        echo
-        [ -n "$token" ] || { echo "No token given, nothing saved."; exit 0; }
-        install -d -m 700 "$HOME/.config/psyduck"
-        umask 177
-        printf "CLAUDE_CODE_OAUTH_TOKEN=%s\\n" "$token" > "$HOME/.config/psyduck/env"
-        echo "Saved to ~/.config/psyduck/env (mode 600)."
-        """
-
-    static let githubLoginScript = """
-        set -e
-        gh auth login --hostname github.com --git-protocol https
-        gh auth setup-git
-        """
-
     private func login(_ record: HostRecord) throws {
         let alias = SSHConfigEntry.alias(record.name)
 
-        step("claude login")
-        try runner.check(remote(alias, script: Self.claudeLoginScript, interactive: true))
-
-        step("GitHub login")
-        say("Agents on this host run without asking permission, and can use whatever this login can reach.")
-        say("A fine-grained token limited to the repos you'll work on here is the safer choice:")
-        say("https://github.com/settings/personal-access-tokens/new")
-        try runner.check(remote(alias, script: Self.githubLoginScript, interactive: true))
-
+        // First, so the setup script finds an identity and doesn't ask.
         step("git identity")
         for key in ["user.name", "user.email"] {
             // Exits 1 when the key isn't set locally. Then there's nothing to copy.
             guard let value = try runner.run(Command("git", ["config", "--global", key])).value else { continue }
             try runner.check(remote(alias, script: "git config --global \(key) \(Command.shellQuote(value))"))
         }
+
+        // The setup script walks through the claude and GitHub logins on the
+        // host and says what is still missing at the end.
+        step("claude and GitHub logins")
+        try runner.check(remote(alias, script: "\(CloudInit.scriptPath) --login-only", interactive: true))
     }
 
     /// `ssh <alias> bash -lc '<script>'`. ssh hands the remote shell one

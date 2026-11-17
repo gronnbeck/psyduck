@@ -272,31 +272,27 @@ final class BootstrapperTests: XCTestCase {
         try bootstrapper.login("dev")
 
         let remote = runner.commands.filter { $0.executable == "ssh" }
-        XCTAssertEqual(remote.count, 4)
-
-        // claude and gh log in on the host, on a terminal.
-        XCTAssertTrue(remote[0].interactive)
-        XCTAssertTrue(remote[0].arguments.contains("-t"))
-        XCTAssertTrue(remote[0].line.contains("setup-token"))
-        XCTAssertTrue(remote[1].interactive)
-        XCTAssertTrue(remote[1].line.contains("gh auth login --hostname github.com --git-protocol https"))
-        XCTAssertTrue(remote[1].line.contains("gh auth setup-git"))
+        XCTAssertEqual(remote.count, 3)
 
         // Only the git identity is copied from this machine.
-        XCTAssertEqual(remote[2].arguments.last, #"bash -lc 'git config --global user.name '\''Ken O'\''\'\'''\''Duck'\'''"#)
-        XCTAssertTrue(remote[3].line.contains("user.email ken@example.com"))
+        XCTAssertEqual(remote[0].arguments.last, #"bash -lc 'git config --global user.name '\''Ken O'\''\'\'''\''Duck'\'''"#)
+        XCTAssertTrue(remote[1].line.contains("user.email ken@example.com"))
+
+        // claude and gh log in on the host, on a terminal, through the setup script.
+        XCTAssertTrue(remote[2].interactive)
+        XCTAssertTrue(remote[2].arguments.contains("-t"))
+        XCTAssertTrue(remote[2].line.contains("/usr/local/bin/psyduck-bootstrap-host --login-only"))
 
         // The Mac's GitHub token is never read, and nothing secret is sent.
         XCTAssertTrue(runner.commands.filter { $0.executable == "gh" }.isEmpty)
         XCTAssertFalse(runner.commands.contains { $0.line.contains("auth token") })
-        XCTAssertTrue(sandbox.output.contains { $0.contains("fine-grained token") })
     }
 
     func testLoginSkipsAGitIdentityThatIsNotSet() throws {
         try sandbox.registry.save(HostRecord(name: "dev", instanceID: "i-0abc", region: "eu-north-1", access: .ssm))
         runner.stub("git", "config", "--global", status: 1)
         try bootstrapper.login("dev")
-        XCTAssertEqual(runner.commands.filter { $0.executable == "ssh" }.count, 2)
+        XCTAssertEqual(runner.commands.filter { $0.executable == "ssh" }.count, 1)
     }
 
     func testLoginOnAnUnknownHost() {
@@ -416,7 +412,7 @@ final class BootstrapperTests: XCTestCase {
         XCTAssertTrue(printed.allSatisfy { $0.hasPrefix("$ ") })
 
         // The logins are shown too.
-        XCTAssertTrue(dry.commands.contains { $0.line.contains("setup-token") })
+        XCTAssertTrue(dry.commands.contains { $0.line.contains("psyduck-bootstrap-host --login-only") })
         // Nothing was written.
         XCTAssertFalse(FileManager.default.fileExists(atPath: sandbox.sshConfigPath))
         XCTAssertFalse(FileManager.default.fileExists(atPath: sandbox.registryPath))

@@ -1,6 +1,8 @@
 import Foundation
 
-/// Renders the first-boot script passed to the instance as user data.
+/// Renders the first-boot script passed to the instance as user data. It
+/// downloads and runs `scripts/bootstrap-host.sh`, which does the install;
+/// this adds only what is specific to a psyduck-managed host.
 ///
 /// It holds **no secrets**: anyone who can call
 /// `ec2:DescribeInstanceAttribute` can read user data back. Logins happen
@@ -14,6 +16,10 @@ public struct CloudInit: Equatable {
     /// nothing in the bucket to fetch. The file names below are the planned
     /// ones and may change when the release job exists.
     public var installPsyduck = false
+    /// Where the host downloads the setup script from.
+    public var scriptURL = "https://raw.githubusercontent.com/gronnbeck/psyduck/main/scripts/bootstrap-host.sh"
+    /// Where the setup script is kept on the host.
+    public static let scriptPath = "/usr/local/bin/psyduck-bootstrap-host"
     public var distBaseURL = "https://nplol-dist.hel1.your-objectstorage.com/psyduck/edge/linux"
 
     public init(arch: Architecture = .arm64, installPsyduck: Bool = false) {
@@ -32,32 +38,18 @@ public struct CloudInit: Equatable {
             "# psyduck host bootstrap. Runs once, as root, on first boot.",
             "# No secrets in here: user data can be read back from the EC2 API.",
             "set -euxo pipefail",
-            "export DEBIAN_FRONTEND=noninteractive",
             "",
-            "# 1. Packages. gh comes from GitHub's own apt repository.",
-            "apt-get update",
-            "apt-get install -y git build-essential curl unzip jq ca-certificates",
-            "install -d -m 755 /etc/apt/keyrings",
-            "curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg",
-            "chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg",
-            #"echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list"#,
-            "apt-get update",
-            "apt-get install -y gh",
-            "",
-            "# 2. Directories psyduck uses.",
-            "sudo -u \(user) -H mkdir -p /home/\(user)/psyduck/repos /home/\(user)/psyduck/workspaces /home/\(user)/.local/bin",
-            "sudo -u \(user) -H install -d -m 700 /home/\(user)/.config/psyduck",
-            "",
-            "# 3. claude, with the native installer (lands in ~/.local/bin).",
-            "sudo -u \(user) -H bash -c 'curl -fsSL https://claude.ai/install.sh | bash'",
-            "",
-            "# 4. Let the user's services run with nobody logged in.",
-            "loginctl enable-linger \(user)",
+            "# The install is scripts/bootstrap-host.sh from the psyduck repository,",
+            "# the same script you can run by hand on any machine. It stays on the",
+            "# host so the logins can run it again.",
+            "curl -fsSL --retry 5 --retry-delay 3 \(scriptURL) -o \(Self.scriptPath)",
+            "chmod 755 \(Self.scriptPath)",
+            "\(Self.scriptPath) --no-login --user \(user)",
         ]
         if installPsyduck {
             lines += [
                 "",
-                "# 5. psyduck and psyduckd, checked against the published checksum.",
+                "# psyduck and psyduckd, checked against the published checksum.",
                 "sudo -u \(user) -H bash -euxo pipefail <<'PSYDUCK'",
                 "cd \"$(mktemp -d)\"",
                 "curl -fsSLO \(distBaseURL)/\(archiveName)",
