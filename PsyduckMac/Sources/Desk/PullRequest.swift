@@ -50,7 +50,7 @@ enum GhPullRequests {
       review: search(query: $review, type: ISSUE, first: 50) { nodes { ...pr } }
       mine: search(query: $mine, type: ISSUE, first: 50) { nodes { ...pr } }
     }
-    fragment pr on DeskPullRequest {
+    fragment pr on PullRequest {
       number title url body isDraft additions deletions changedFiles updatedAt
       headRefName baseRefName reviewDecision
       repository { nameWithOwner }

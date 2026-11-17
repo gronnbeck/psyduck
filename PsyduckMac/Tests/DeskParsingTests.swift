@@ -2,6 +2,13 @@ import XCTest
 @testable import Psyduck
 
 final class GhPullRequestsTests: XCTestCase {
+    /// The query names GitHub's types, not this app's: a rename of the Swift
+    /// type must not reach it.
+    func testTheQueryUsesGitHubsTypeNames() {
+        XCTAssertTrue(GhPullRequests.graphql.contains("fragment pr on PullRequest {"))
+        XCTAssertFalse(GhPullRequests.graphql.contains("Desk"))
+    }
+
     private let response = """
     {"data":{
       "review":{"nodes":[
