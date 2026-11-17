@@ -58,7 +58,7 @@ Local builds are ad-hoc signed and have no update feed, so Sparkle stays off.
 | `docs/DISTRIBUTION.md` | How releases work, and what secrets they need |
 | `docs/REMOTE.md` | Plan: run agents on a remote machine (psyduckd + CLI) |
 | `docs/EC2.md` | Spec: bootstrap a Linux EC2 host for psyduck from your Mac |
-| `scripts/bootstrap-host.sh` | Run on a Linux machine to set it up for psyduck (git, gh, claude, logins) |
+| `scripts/bootstrap-host.sh` | Run on a Linux machine to set it up for psyduck (git, gh, claude, guided logins) |
 
 ## License
 

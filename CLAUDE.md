@@ -16,6 +16,11 @@ so this project's Claude session is a bare `claude`, not kekkai.
 - **Architecture:** psyduck drives the `claude` CLI (`-p --output-format
   stream-json --include-partial-messages`, prompt on stdin, `--resume` per
   turn), never the API directly. All git is the git CLI via `Shell`.
+- **Settings file:** `~/.config/psyduck/.env`, `KEY=VALUE` lines. `Shell`
+  reads it (`EnvFile`) each time it starts a tool and adds the values to the
+  tool's environment, over psyduck's own. It is where a host keeps the claude
+  token (`CLAUDE_CODE_OAUTH_TOKEN`, written by `scripts/bootstrap-host.sh`).
+  Machine-level secrets and environment go there, not in UserDefaults.
 - **Workspaces** are `git worktree`s at `~/psyduck/workspaces/<repo>/<name>`
   on branch `psyduck/<name>`, cut from the remote's default branch (local copy
   preferred). The diff panel compares against the commit recorded at creation.
