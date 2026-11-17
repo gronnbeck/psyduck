@@ -92,6 +92,34 @@ public struct EngineStorage: Sendable {
         }
     }
 
+    /// Archived workspaces, next to `state.json`. Read and written only when
+    /// archiving (and, later, restoring), so they cost nothing at runtime.
+    /// An archived workspace's event log stays where it was.
+    public var archiveURL: URL? {
+        stateURL?.deletingLastPathComponent().appendingPathComponent("archive.json")
+    }
+
+    public func loadArchive() -> [Workspace] {
+        guard let archiveURL, let data = try? Data(contentsOf: archiveURL) else { return [] }
+        return (try? JSONDecoder().decode([Workspace].self, from: data)) ?? []
+    }
+
+    /// Adds one record to `archive.json`, leaving the others exactly as they
+    /// are written (older ones carry their chat inline).
+    public func appendToArchive(_ workspace: Workspace) {
+        guard let archiveURL, let record = try? JSONEncoder().encode(workspace),
+              let added = try? JSONSerialization.jsonObject(with: record) else { return }
+        var records: [Any] = []
+        if let data = try? Data(contentsOf: archiveURL),
+           let existing = try? JSONSerialization.jsonObject(with: data) as? [Any] {
+            records = existing
+        }
+        records.append(added)
+        if let data = try? JSONSerialization.data(withJSONObject: records, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: archiveURL, options: .atomic)
+        }
+    }
+
     public func deleteLog(for id: UUID) {
         if let url = logURL(for: id) { try? FileManager.default.removeItem(at: url) }
     }

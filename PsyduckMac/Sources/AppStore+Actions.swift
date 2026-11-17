@@ -12,7 +12,7 @@ extension AppStore {
     func refreshBranch(_ id: UUID, network: Bool) async {
         guard let state = await engine.branchState(id, network: network),
               workspaces.contains(where: { $0.id == id }) else { return }
-        branches[id] = state
+        if branches[id] != state { branches[id] = state }
     }
 
     func perform(_ action: PrimaryAction, on id: UUID) {

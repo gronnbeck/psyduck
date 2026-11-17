@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Everything the window shows. The work — repos, worktrees, claude turns,
 /// event logs — is the engine's; this mirrors its state for SwiftUI and
-/// keeps what only the window cares about (selection, the open diff).
+/// keeps what only the window cares about (selection, the open diff tabs).
 @MainActor
 final class AppStore: ObservableObject {
     @Published private(set) var repos: [Repo] = []
@@ -15,26 +15,34 @@ final class AppStore: ObservableObject {
     @Published var errorMessage: String?
     /// Settings is a page in the main window, over the chat and changes panes.
     @Published var showingSettings = false
+    /// The workspace whose rename sheet is open.
+    @Published var renaming: Workspace?
 
     @Published private(set) var changes: [UUID: [DiffFile]] = [:]
     /// Each workspace's branch against its remote and PR, for the header button.
     @Published var branches: [UUID: BranchState] = [:]
     /// Workspaces with a header action (commit, push, PR…) in flight.
     @Published var acting: Set<UUID> = []
-    /// The file opened wide in the center pane, per workspace.
-    @Published var openDiff: [UUID: DiffFile] = [:]
-    /// The file whose diff shows inline in the changes panel, per workspace.
-    @Published var selectedFile: [UUID: DiffFile] = [:]
+    /// Diffs open as tabs beside the session: the files' paths, in the order
+    /// they were opened.
+    @Published private(set) var diffTabs: [UUID: [String]] = [:]
+    /// The tab in front, by path. Nil is the session.
+    @Published var activeDiff: [UUID: String] = [:]
     @Published private(set) var creating: Set<UUID> = []
 
     let settings: AppSettings
     let engine: WorkspaceEngine
     /// One listener per workspace, feeding its events into `transcripts`.
     private var listeners: [UUID: Task<Void, Never>] = [:]
+    private let storage: EngineStorage
+    /// Streamed tokens not yet shown, and the workspaces about to show theirs.
+    private var pendingDeltas: [UUID: [WorkspaceEvent]] = [:]
+    private var flushing: Set<UUID> = []
 
     init(settings: AppSettings, stateURL: URL? = EngineStorage.defaultStateURL()) {
         self.settings = settings
         let storage = EngineStorage(stateURL: stateURL)
+        self.storage = storage
         let loaded = storage.load()
         engine = WorkspaceEngine(loaded: loaded, storage: storage) { await settings.config }
         repos = loaded.repos
@@ -63,8 +71,9 @@ final class AppStore: ObservableObject {
     /// Takes the engine's repos and workspaces as the truth.
     private func sync() async {
         let snapshot = await engine.snapshot()
-        repos = snapshot.repos
-        workspaces = snapshot.workspaces
+        // Say so only when something changed, or the whole window redraws.
+        if repos != snapshot.repos { repos = snapshot.repos }
+        if workspaces != snapshot.workspaces { workspaces = snapshot.workspaces }
         let alive = Set(workspaces.map(\.id))
         for id in listeners.keys where !alive.contains(id) { forget(id) }
         if selectedWorkspace == nil { selection = workspaces.first?.id }
@@ -83,6 +92,20 @@ final class AppStore: ObservableObject {
     }
 
     private func receive(_ event: WorkspaceEvent, for id: UUID) {
+        if case .textDelta = event.kind {
+            // Tokens arrive far faster than the window needs redrawing.
+            pendingDeltas[id, default: []].append(event)
+            if flushing.insert(id).inserted {
+                Task {
+                    try? await Task.sleep(for: .milliseconds(60))
+                    flushing.remove(id)
+                    flush(id)
+                }
+            }
+            return
+        }
+        // Anything else goes after the tokens that came before it.
+        flush(id)
         transcripts[id, default: Transcript()].apply(event)
         switch event.kind {
         case .toolResult:
@@ -99,14 +122,22 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// Shows the tokens held back since the last redraw.
+    private func flush(_ id: UUID) {
+        guard let events = pendingDeltas.removeValue(forKey: id), var transcript = transcripts[id] else { return }
+        for event in events { transcript.apply(event) }
+        transcripts[id] = transcript
+    }
+
     private func forget(_ id: UUID) {
         listeners[id]?.cancel()
         listeners[id] = nil
+        pendingDeltas[id] = nil
         transcripts[id] = nil
         changes[id] = nil
         branches[id] = nil
-        openDiff[id] = nil
-        selectedFile[id] = nil
+        diffTabs[id] = nil
+        activeDiff[id] = nil
     }
 
     // MARK: - Repos
@@ -159,7 +190,25 @@ final class AppStore: ObservableObject {
         }
     }
 
-    /// Removes the worktree and forgets the workspace. The branch is kept.
+    /// Renames a workspace and its branch together. The worktree folder stays
+    /// where it is. Returns what went wrong, or nil.
+    @discardableResult
+    func rename(_ workspace: Workspace, to raw: String) async -> String? {
+        do {
+            try await engine.rename(workspace.id, to: raw)
+        } catch {
+            return error.localizedDescription
+        }
+        await sync()
+        await refreshBranch(workspace.id, network: false)
+        return nil
+    }
+
+    /// Workspaces archived so far, from `archive.json`.
+    func loadArchive() -> [Workspace] { storage.loadArchive() }
+
+    /// Soft-deletes a workspace: the worktree goes, uncommitted work is saved
+    /// to a ref, and the record moves to `archive.json`. The branch is kept.
     func archive(_ workspace: Workspace) async {
         do {
             try await engine.archive(workspace.id)
@@ -187,13 +236,29 @@ final class AppStore: ObservableObject {
         guard workspaces.contains(where: { $0.id == id }) else { return }
         let files = await engine.changedFiles(id)
         guard workspaces.contains(where: { $0.id == id }) else { return }
-        changes[id] = files
-        if let open = openDiff[id], !files.contains(where: { $0.path == open.path }) {
-            openDiff[id] = nil
-        }
+        // Asked every few seconds; say so only when something changed, or
+        // the whole window redraws for nothing.
+        if changes[id] != files { changes[id] = files }
+        let paths = Set(files.map(\.path))
+        for gone in diffTabs[id] ?? [] where !paths.contains(gone) { closeDiff(gone, in: id) }
     }
 
-    /// One file's unified diff against the workspace's base commit.
+    /// Opens a changed file's diff in a tab, or brings its tab to the front.
+    func openDiff(_ path: String, in id: UUID) {
+        if diffTabs[id]?.contains(path) != true { diffTabs[id, default: []].append(path) }
+        activeDiff[id] = path
+    }
+
+    /// Closes a diff tab. If it was in front, its neighbour takes over, or
+    /// the session when it was the last one.
+    func closeDiff(_ path: String, in id: UUID) {
+        guard var tabs = diffTabs[id], let index = tabs.firstIndex(of: path) else { return }
+        tabs.remove(at: index)
+        diffTabs[id] = tabs.isEmpty ? nil : tabs
+        if activeDiff[id] == path { activeDiff[id] = tabs.isEmpty ? nil : tabs[min(index, tabs.count - 1)] }
+    }
+
+    /// One file's unified diff against where the branch left its base.
     func diff(of file: DiffFile, in workspace: Workspace) async throws -> String {
         try await engine.diff(of: file, in: workspace.id)
     }

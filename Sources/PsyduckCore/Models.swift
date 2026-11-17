@@ -20,15 +20,18 @@ public struct Repo: Codable, Identifiable, Hashable, Sendable {
 public struct Workspace: Codable, Identifiable, Hashable, Sendable {
     public var id = UUID()
     public var repoID: UUID
-    /// Short, human name, also the last path component and the branch suffix.
+    /// Short, human name. The branch follows it (`branchName(for:)`), and a
+    /// rename changes both. The worktree folder keeps the name it was made
+    /// with: claude finds its session by that path.
     public var name: String
     public var branch: String
     /// The worktree's directory. claude runs here, never in the repo itself.
     public var path: String
     /// What the branch was cut from, e.g. `main` or `origin/main`.
     public var baseRef: String
-    /// The exact commit `baseRef` pointed at when the workspace was made — the
-    /// diff panel compares against this, so it shows only this workspace's work.
+    /// The exact commit `baseRef` pointed at when the workspace was made. The
+    /// diff panel compares against where the branch and `baseRef` last met
+    /// (`Git.diffBase`), and falls back to this.
     public var baseCommit: String
     /// claude's own session id, from the last turn. Passed back with
     /// `--resume` so the conversation continues.
@@ -36,6 +39,22 @@ public struct Workspace: Codable, Identifiable, Hashable, Sendable {
     /// What every turn in this workspace has cost so far.
     public var totalCost: Double?
     public var createdAt = Date()
+    /// Set once archived: the worktree is gone, the record lives in `archive.json`.
+    public var archivedAt: Date?
+    /// Uncommitted work at archive time, as a commit under `refs/psyduck/archive/`.
+    public var archivedWork: String?
+
+    /// A typed name made safe for a branch: trimmed, spaces to dashes.
+    public static func cleanName(_ raw: String) -> String {
+        raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: \.isWhitespace).joined(separator: "-")
+    }
+
+    /// The branch for a workspace name: `psyduck/<name>`, or the name itself
+    /// when it already has a prefix of its own (`fix/login`).
+    public static func branchName(for name: String) -> String {
+        name.contains("/") ? name : "psyduck/\(name)"
+    }
 
     public init(id: UUID = UUID(), repoID: UUID, name: String, branch: String, path: String,
                 baseRef: String, baseCommit: String, claudeSessionID: String? = nil,

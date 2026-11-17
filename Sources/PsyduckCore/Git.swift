@@ -92,28 +92,62 @@ public struct Git: Sendable {
         try await output(["clone", url, directory], in: parent)
     }
 
-    /// The branch new workspaces start from: the remote's default branch,
-    /// preferring the local copy of it when there is one, else whatever is
-    /// checked out.
+    /// Where new workspaces start: the remote's default branch as it is
+    /// upstream right now (`origin/main`, `origin/master`, …), fetched first.
+    /// Never the local copy of it and never whatever is checked out, which
+    /// can be behind or carry unpushed work.
+    ///
+    /// Offline, the last fetched `origin/<branch>` is used. Only a repo with
+    /// no `origin` falls back to a local branch.
     public func defaultBaseRef(repo: String) async -> String {
-        if let remoteHead = try? await output(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], in: repo),
-           !remoteHead.isEmpty {
-            let local = remoteHead.replacingOccurrences(of: "origin/", with: "")
-            if (try? await output(["rev-parse", "--verify", "--quiet", "refs/heads/\(local)"], in: repo)) != nil {
-                return local
-            }
-            return remoteHead
-        }
-        for candidate in ["main", "master"] {
-            if (try? await output(["rev-parse", "--verify", "--quiet", "refs/heads/\(candidate)"], in: repo)) != nil {
+        guard (try? await output(["remote", "get-url", "origin"], in: repo)) != nil else {
+            for candidate in ["main", "master"] where await branchExists(candidate, repo: repo) {
                 return candidate
             }
+            return (try? await output(["rev-parse", "--abbrev-ref", "HEAD"], in: repo)) ?? "HEAD"
+        }
+
+        var branch = await remoteDefaultBranch(repo: repo)
+        if branch == nil {
+            // origin/HEAD isn't recorded (a repo made with `git remote add`,
+            // not `git clone`). Ask the remote which branch is its default.
+            _ = try? await output(["remote", "set-head", "origin", "--auto"], in: repo)
+            branch = await remoteDefaultBranch(repo: repo)
+        }
+        if let branch {
+            _ = try? await output(["fetch", "origin", branch], in: repo)
+            return "origin/\(branch)"
+        }
+        // The remote couldn't be asked. Take what has been fetched before.
+        _ = try? await output(["fetch", "origin"], in: repo)
+        for candidate in ["main", "master"] where await remoteBranchExists(candidate, repo: repo) {
+            return "origin/\(candidate)"
         }
         return (try? await output(["rev-parse", "--abbrev-ref", "HEAD"], in: repo)) ?? "HEAD"
     }
 
+    /// The branch `origin/HEAD` points at, without `origin/`.
+    private func remoteDefaultBranch(repo: String) async -> String? {
+        guard let head = try? await output(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], in: repo),
+              head.hasPrefix("origin/"), head.count > 7 else { return nil }
+        return String(head.dropFirst(7))
+    }
+
+    private func remoteBranchExists(_ branch: String, repo: String) async -> Bool {
+        (try? await output(["rev-parse", "--verify", "--quiet", "refs/remotes/origin/\(branch)"], in: repo)) != nil
+    }
+
     public func branchExists(_ branch: String, repo: String) async -> Bool {
         (try? await output(["rev-parse", "--verify", "--quiet", "refs/heads/\(branch)"], in: repo)) != nil
+    }
+
+    /// Renames a local branch, whichever worktree has it checked out. If it
+    /// was pushed, the link to the old remote branch is dropped, so the next
+    /// push makes a remote branch with the new name. The old one stays on
+    /// the remote.
+    public func renameBranch(_ old: String, to new: String, repo: String) async throws {
+        try await output(["branch", "-m", old, new], in: repo)
+        _ = try? await output(["branch", "--unset-upstream", new], in: repo)
     }
 
     // MARK: - Worktrees
@@ -128,12 +162,38 @@ public struct Git: Sendable {
         return commit
     }
 
+    /// Saves a worktree's uncommitted work, untracked files included, as a
+    /// commit on top of HEAD kept under `ref`, without moving the branch.
+    /// Returns nil when there's nothing to keep.
+    public func snapshotWork(in worktree: String, ref: String) async throws -> String? {
+        guard try await !output(["status", "--porcelain"], in: worktree).isEmpty else { return nil }
+        try await output(["add", "-A"], in: worktree)
+        let tree = try await output(["write-tree"], in: worktree)
+        let commit = try await output(["commit-tree", tree, "-p", "HEAD", "-m", "psyduck: archived work"], in: worktree)
+        try await output(["update-ref", ref, commit], in: worktree)
+        return commit
+    }
+
     /// Removes the worktree directory. The branch stays, so no work is lost.
     public func removeWorktree(repo: String, directory: String) async throws {
         try await output(["worktree", "remove", "--force", directory], in: repo)
     }
 
     // MARK: - Diffs
+
+    /// What a workspace's changes are measured against: where its branch and
+    /// the base branch upstream last met, which is what a pull request
+    /// compares against too. The commit recorded when the workspace was made
+    /// falls behind as soon as the base branch is merged or rebased in, and
+    /// comparing against it then lists everyone else's work as this
+    /// workspace's.
+    public func diffBase(in worktree: String, baseRef: String, baseCommit: String) async -> String {
+        let name = baseRef.hasPrefix("origin/") ? String(baseRef.dropFirst(7)) : baseRef
+        for ref in ["refs/remotes/origin/\(name)", baseRef] {
+            if let met = try? await output(["merge-base", "HEAD", ref], in: worktree), !met.isEmpty { return met }
+        }
+        return baseCommit
+    }
 
     /// Everything that differs from `base`: commits on the branch, staged and
     /// unstaged changes, and untracked files.

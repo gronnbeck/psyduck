@@ -149,6 +149,62 @@ final class EngineTests: XCTestCase {
         XCTAssertTrue(branchKept)
     }
 
+    func testRenameMovesTheBranchAndRefusesWhatGitCannotUse() async throws {
+        let engine = fixture.engine()
+        let workspace = try await workspace(in: engine)
+        let tip = try await fixture.git.output(["rev-parse", workspace.branch], in: fixture.repo)
+
+        try await engine.rename(workspace.id, to: "  fix login ")
+        var found = await engine.workspace(workspace.id)
+        var renamed = try XCTUnwrap(found)
+        XCTAssertEqual(renamed.name, "fix-login")
+        XCTAssertEqual(renamed.branch, "psyduck/fix-login")
+        XCTAssertEqual(renamed.path, workspace.path, "the folder stays: claude finds its session by it")
+        let movedTip = try await fixture.git.output(["rev-parse", "psyduck/fix-login"], in: fixture.repo)
+        XCTAssertEqual(movedTip, tip)
+
+        try await engine.rename(workspace.id, to: "feat/login")
+        found = await engine.workspace(workspace.id)
+        renamed = try XCTUnwrap(found)
+        XCTAssertEqual(renamed.branch, "feat/login")
+
+        try await fixture.git.output(["branch", "psyduck/taken"], in: fixture.repo)
+        for bad in ["bad..name", "taken", "   "] {
+            do {
+                try await engine.rename(workspace.id, to: bad)
+                XCTFail("\(bad) should be refused")
+            } catch {}
+        }
+        let unchanged = await engine.workspace(workspace.id)
+        XCTAssertEqual(unchanged?.branch, "feat/login")
+    }
+
+    func testArchiveKeepsUncommittedWorkAndTheChat() async throws {
+        let engine = fixture.engine(stored: true)
+        let workspace = try await workspace(in: engine)
+        let stream = await engine.events(for: workspace.id)
+        await engine.send("add a duck", to: workspace.id)
+        _ = await collect(stream, until: isTurnEnded)
+        let head = try await fixture.git.output(["rev-parse", workspace.branch], in: fixture.repo)
+
+        try await engine.archive(workspace.id)
+        let branchHead = try await fixture.git.output(["rev-parse", workspace.branch], in: fixture.repo)
+        XCTAssertEqual(branchHead, head, "archiving doesn't move the branch")
+
+        let storage = EngineStorage(stateURL: fixture.stateURL)
+        let archived = try XCTUnwrap(storage.loadArchive().first)
+        XCTAssertEqual(archived.id, workspace.id)
+        XCTAssertNotNil(archived.archivedAt)
+        let work = try XCTUnwrap(archived.archivedWork)
+        let saved = try await fixture.git.output(["show", "\(work):duck.txt"], in: fixture.repo)
+        XCTAssertEqual(saved, "quack")
+        let log = try XCTUnwrap(storage.logURL(for: workspace.id))
+        XCTAssertFalse(EventLog.read(log).isEmpty, "the chat is kept with the archive")
+
+        // Archived workspaces aren't loaded at launch.
+        XCTAssertTrue(storage.load().workspaces.isEmpty)
+    }
+
     func testTurnBecomesEventsAndATranscript() async throws {
         let engine = fixture.engine()
         let workspace = try await workspace(in: engine)
@@ -347,7 +403,8 @@ final class EngineTests: XCTestCase {
         let after = await reopened.transcript(for: workspace.id)
         XCTAssertEqual(after, before)
 
-        try await reopened.archive(workspace.id)
+        // Removing the repo forgets its workspaces, logs included.
+        await reopened.removeRepo(workspace.repoID)
         XCTAssertFalse(FileManager.default.fileExists(atPath: storage.logURL(for: workspace.id)!.path))
     }
 }

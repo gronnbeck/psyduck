@@ -2,18 +2,15 @@ import PsyduckCore
 import SwiftUI
 
 /// The right-hand panel: the branch's next step (top right), every file the
-/// workspace changed since its base, the selected file's diff inline, and
-/// Discard / Commit while there's uncommitted work.
+/// workspace changed since its base, and Discard / Commit while there's
+/// uncommitted work. Clicking a file opens its diff in a tab beside the
+/// session.
 struct ChangesPanel: View {
     @EnvironmentObject private var store: AppStore
     let workspace: Workspace
     @State private var confirmDiscard = false
 
     private var files: [DiffFile] { store.changes[workspace.id] ?? [] }
-    private var selected: DiffFile? {
-        guard let file = store.selectedFile[workspace.id] else { return nil }
-        return files.first { $0.path == file.path }
-    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -51,20 +48,18 @@ struct ChangesPanel: View {
                 .padding(32)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
+                let active = store.activeDiff[workspace.id]
                 ScrollView {
-                    VStack(spacing: 2) {
+                    // Lazy: a branch can touch thousands of files.
+                    LazyVStack(spacing: 2) {
                         ForEach(files) { file in
-                            FileRow(file: file, selected: selected?.path == file.path) {
-                                store.selectedFile[workspace.id] = selected?.path == file.path ? nil : file
+                            FileRow(file: file, selected: active == file.path) {
+                                store.openDiff(file.path, in: workspace.id)
                             }
+                            .equatable()
                         }
                     }
                     .padding(8)
-                    if let selected {
-                        InlineDiff(workspace: workspace, file: selected)
-                            .padding(.horizontal, 8)
-                            .padding(.bottom, 8)
-                    }
                 }
             }
 
@@ -151,11 +146,14 @@ private struct PrimaryActionButton: View {
     }
 }
 
-private struct FileRow: View {
+private struct FileRow: View, Equatable {
     let file: DiffFile
     let selected: Bool
     let open: () -> Void
     @State private var hovering = false
+
+    /// What it shows, so an unchanged row is left alone when the store moves.
+    static func == (a: FileRow, b: FileRow) -> Bool { a.file == b.file && a.selected == b.selected }
 
     var body: some View {
         Button(action: open) {
@@ -187,63 +185,5 @@ private struct FileRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-    }
-}
-
-/// The selected file's diff, as a card under the file list.
-private struct InlineDiff: View {
-    @EnvironmentObject private var store: AppStore
-    let workspace: Workspace
-    let file: DiffFile
-    @State private var lines: [DiffLine] = []
-    @State private var error: String?
-    /// The card's width, so row tints span it even when the code is shorter.
-    @State private var width: CGFloat = 0
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Text(file.path).lineLimit(1).truncationMode(.head)
-                Spacer(minLength: 4)
-                Button { store.openDiff[workspace.id] = file } label: {
-                    Image(systemName: "arrow.up.left.and.arrow.down.right")
-                }
-                .buttonStyle(.tkIcon(24))
-                .help("Open wide")
-            }
-            .font(.mono(12, .medium))
-            .foregroundStyle(Tk.inkMuted)
-            .padding(.leading, 12)
-            .padding(.trailing, 4)
-            .frame(height: 32)
-            .background(Tk.bg100)
-            Hairline()
-            if let error {
-                Text(error).font(.mono(12)).foregroundStyle(Tk.danger).padding(12)
-            } else {
-                ScrollView(.horizontal) {
-                    DiffLines(lines: lines, compact: true)
-                        .padding(.vertical, 4)
-                        .frame(minWidth: width, alignment: .leading)
-                }
-            }
-        }
-        .background(Tk.bg000)
-        .background(GeometryReader { proxy in
-            Color.clear
-                .onAppear { width = proxy.size.width }
-                .onChange(of: proxy.size.width) { width = proxy.size.width }
-        })
-        .clipShape(RoundedRectangle(cornerRadius: Tk.radiusLg, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: Tk.radiusLg, style: .continuous).strokeBorder(Tk.line, lineWidth: 1))
-        .task(id: "\(file.path)|\(file.additions ?? -1)|\(file.deletions ?? -1)") {
-            do {
-                let text = try await store.diff(of: file, in: workspace)
-                lines = Git.parseDiff(text).filter { $0.kind != .header }
-                error = nil
-            } catch {
-                self.error = error.localizedDescription
-            }
-        }
     }
 }

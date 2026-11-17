@@ -33,6 +33,7 @@ struct ShellView: View {
         .background(Tk.bg000)
         .foregroundStyle(Tk.ink)
         .ignoresSafeArea()
+        .sheet(item: $store.renaming) { RenameSheet(workspace: $0) }
         .alert("psyduck", isPresented: Binding(
             get: { store.errorMessage != nil },
             set: { if !$0 { store.errorMessage = nil } }
@@ -44,17 +45,167 @@ struct ShellView: View {
     }
 }
 
-/// The chat, or a diff opened full-width from the changes panel.
+/// Renames a workspace. Its branch is renamed with it.
+private struct RenameSheet: View {
+    @EnvironmentObject private var store: AppStore
+    let workspace: Workspace
+    @State private var name = ""
+    @State private var problem: String?
+    @State private var busy = false
+
+    private var cleaned: String { Workspace.cleanName(name) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Rename workspace").font(.display(22))
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Name").font(.sans(12, .medium)).foregroundStyle(Tk.inkMuted)
+                TkTextField(text: $name, placeholder: workspace.name)
+                    .onSubmit(rename)
+                Text("Branch: \(Workspace.branchName(for: cleaned.isEmpty ? workspace.name : cleaned))")
+                    .font(.mono(12)).foregroundStyle(Tk.inkFaint)
+                Text("The branch is renamed too. The worktree folder stays where it is.")
+                    .font(.sans(12)).foregroundStyle(Tk.inkFaint)
+                if let problem {
+                    Text(problem).font(.sans(12)).foregroundStyle(Tk.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            HStack(spacing: 8) {
+                Spacer()
+                Button("Cancel") { store.renaming = nil }.buttonStyle(.tkGhost)
+                    .keyboardShortcut(.cancelAction)
+                Button(busy ? "Renaming…" : "Rename", action: rename)
+                    .buttonStyle(.tkPrimary)
+                    .disabled(busy || cleaned.isEmpty || cleaned == workspace.name)
+            }
+        }
+        .padding(24)
+        .frame(width: 480)
+        .background(Tk.bg200)
+        .onAppear { name = workspace.name }
+    }
+
+    private func rename() {
+        guard !busy, !cleaned.isEmpty else { return }
+        busy = true
+        Task {
+            problem = await store.rename(workspace, to: name)
+            busy = false
+            if problem == nil { store.renaming = nil }
+        }
+    }
+}
+
+/// The session, and any diffs opened from the changes panel as tabs beside it.
 private struct CenterPane: View {
     @EnvironmentObject private var store: AppStore
     let workspace: Workspace
 
     var body: some View {
-        if let file = store.openDiff[workspace.id] {
-            DiffView(workspace: workspace, file: file)
-        } else {
-            ChatView(workspace: workspace)
+        let files = store.changes[workspace.id] ?? []
+        let tabs = (store.diffTabs[workspace.id] ?? []).compactMap { path in files.first { $0.path == path } }
+        let active = tabs.first { $0.path == store.activeDiff[workspace.id] }
+
+        VStack(spacing: 0) {
+            if !tabs.isEmpty {
+                DiffTabs(workspace: workspace, tabs: tabs, active: active?.path)
+            }
+            ZStack {
+                // The session stays alive under a diff, so what you were
+                // typing and where you had scrolled to are still there.
+                ChatView(workspace: workspace)
+                    .opacity(active == nil ? 1 : 0)
+                    .disabled(active != nil)
+                    .accessibilityHidden(active != nil)
+                if let active {
+                    DiffView(workspace: workspace, file: active).id(active.path)
+                }
+            }
         }
+    }
+}
+
+/// The tab strip over the center pane: the session first, then one tab per
+/// open diff.
+private struct DiffTabs: View {
+    @EnvironmentObject private var store: AppStore
+    let workspace: Workspace
+    let tabs: [DiffFile]
+    let active: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 0) {
+                        Tab(active: active == nil, help: "The session with Claude") {
+                            store.activeDiff[workspace.id] = nil
+                        } label: {
+                            Image(systemName: "bubble.left").font(.system(size: 11, weight: .medium))
+                            Text("Session").font(.sans(12, .medium))
+                        }
+                        ForEach(tabs) { file in
+                            Tab(active: active == file.path, help: file.path) {
+                                store.activeDiff[workspace.id] = file.path
+                            } close: {
+                                store.closeDiff(file.path, in: workspace.id)
+                            } label: {
+                                Text(file.status.letter).font(.mono(11, .semibold)).foregroundStyle(file.status.color)
+                                Text(file.fileName).font(.mono(12, .medium))
+                            }
+                            .id(file.path)
+                        }
+                    }
+                }
+                .onChange(of: active) { if let active { proxy.scrollTo(active) } }
+            }
+            .frame(height: 36)
+            .background(Tk.bg100)
+            Hairline()
+        }
+    }
+}
+
+private struct Tab<Label: View>: View {
+    let active: Bool
+    let help: String
+    let select: () -> Void
+    var close: (() -> Void)?
+    @ViewBuilder var label: Label
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button(action: select) {
+                HStack(spacing: 6) { label }
+                    .lineLimit(1)
+                    .frame(maxHeight: .infinity)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if let close {
+                Button(action: close) {
+                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+                        .frame(width: 16, height: 16)
+                        .background(RoundedRectangle(cornerRadius: 4).fill(hovering ? Tk.bg300 : .clear))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Tk.inkMuted)
+                .opacity(active || hovering ? 1 : 0)
+                .accessibilityLabel("Close \(help)")
+            }
+        }
+        .foregroundStyle(active ? Tk.ink : Tk.inkMuted)
+        .padding(.leading, 14)
+        .padding(.trailing, close == nil ? 14 : 8)
+        .frame(height: 36)
+        .background(active ? Tk.bg000 : (hovering ? Tk.bg200 : .clear))
+        .overlay(alignment: .top) { Rectangle().fill(active ? Tk.brand : .clear).frame(height: 2) }
+        .overlay(alignment: .trailing) { Hairline(vertical: true) }
+        .onHover { hovering = $0 }
+        .help(help)
     }
 }
 

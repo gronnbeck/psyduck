@@ -5,13 +5,14 @@ public enum EngineError: LocalizedError {
     case unknownWorkspace
     case badRepoURL
     case worktree(String)
+    case rename(String)
 
     public var errorDescription: String? {
         switch self {
         case .unknownRepo: return "that repo isn't in psyduck"
         case .unknownWorkspace: return "that workspace doesn't exist"
         case .badRepoURL: return "that doesn't look like a repo url"
-        case .worktree(let message): return message
+        case .worktree(let message), .rename(let message): return message
         }
     }
 }
@@ -162,31 +163,78 @@ public actor WorkspaceEngine {
         return workspace
     }
 
-    /// Removes the worktree and forgets the workspace. The branch is kept.
+    /// Renames a workspace and its branch together. The worktree folder stays
+    /// where it is. Throws `EngineError.rename` with what's in the way.
+    public func rename(_ id: UUID, to raw: String) async throws {
+        let name = Workspace.cleanName(raw)
+        guard !name.isEmpty else { throw EngineError.rename("Type a name.") }
+        guard let workspace = workspace(id), let repo = repos.first(where: { $0.id == workspace.repoID }) else {
+            throw EngineError.rename("That workspace is gone.")
+        }
+        guard name != workspace.name else { return }
+        guard turns[id] == nil else {
+            throw EngineError.rename("Claude is working here. Stop it or wait, then rename.")
+        }
+        if let pr = pullRequests[id], pr.state == "OPEN" {
+            throw EngineError.rename("This branch has an open pull request (#\(pr.number)). Renaming it would leave the pull request behind.")
+        }
+        guard !workspaces.contains(where: { $0.repoID == repo.id && $0.name == name }) else {
+            throw EngineError.rename("Another workspace is already called \(name).")
+        }
+
+        let branch = Workspace.branchName(for: name)
+        let git = await config().git
+        guard (try? await git.output(["check-ref-format", "--branch", branch], in: repo.path)) != nil else {
+            throw EngineError.rename("\(branch) isn't a valid branch name.")
+        }
+        guard await !git.branchExists(branch, repo: repo.path) else {
+            throw EngineError.rename("A branch called \(branch) already exists.")
+        }
+        do {
+            try await git.renameBranch(workspace.branch, to: branch, repo: repo.path)
+        } catch {
+            throw EngineError.rename("couldn't rename the branch: \(error.localizedDescription)")
+        }
+        // Things may have moved while git ran.
+        guard let i = index(of: id) else { return }
+        workspaces[i].name = name
+        workspaces[i].branch = branch
+        save()
+    }
+
+    /// Soft-deletes a workspace: stops claude, saves any uncommitted work to
+    /// a ref, removes the worktree and moves the record to `archive.json`,
+    /// which isn't loaded at launch. The branch and the event log are kept.
     public func archive(_ id: UUID) async throws {
         guard let workspace = workspace(id) else { return }
         stop(id)
+        var archived = workspace
+        archived.archivedAt = Date()
         if let repo = repos.first(where: { $0.id == workspace.repoID }),
            FileManager.default.fileExists(atPath: workspace.path) {
             do {
-                try await config().git.removeWorktree(repo: repo.path, directory: workspace.path)
+                let git = await config().git
+                archived.archivedWork = try await git.snapshotWork(
+                    in: workspace.path, ref: "refs/psyduck/archive/\(workspace.id.uuidString)")
+                try await git.removeWorktree(repo: repo.path, directory: workspace.path)
             } catch {
-                throw EngineError.worktree("couldn't remove the worktree: \(error.localizedDescription)")
+                throw EngineError.worktree("couldn't archive the workspace: \(error.localizedDescription)")
             }
         }
+        storage.appendToArchive(archived)
         workspaces.removeAll { $0.id == id }
-        forget(id)
+        forget(id, keepingLog: true)
         save()
     }
 
     /// Drops everything kept for a workspace that's going away.
-    private func forget(_ id: UUID) {
+    private func forget(_ id: UUID, keepingLog: Bool = false) {
         for continuation in (subscribers[id] ?? [:]).values { continuation.finish() }
         subscribers[id] = nil
         logs[id] = nil
         transcripts[id] = nil
         pullRequests[id] = nil
-        storage.deleteLog(for: id)
+        if !keepingLog { storage.deleteLog(for: id) }
     }
 
     // MARK: - Events
@@ -343,16 +391,24 @@ public actor WorkspaceEngine {
 
     // MARK: - Changes
 
-    /// Every file the workspace changed since its base commit.
-    public func changedFiles(_ id: UUID) async -> [DiffFile] {
-        guard let workspace = workspace(id) else { return [] }
-        return (try? await config().git.changedFiles(in: workspace.path, base: workspace.baseCommit)) ?? []
+    /// The commit a workspace's changes are compared against: where its
+    /// branch met its base branch, as a pull request compares.
+    private func diffBase(_ workspace: Workspace, git: Git) async -> String {
+        await git.diffBase(in: workspace.path, baseRef: workspace.baseRef, baseCommit: workspace.baseCommit)
     }
 
-    /// One file's unified diff against the workspace's base commit.
+    /// Every file the workspace changed since it left its base branch.
+    public func changedFiles(_ id: UUID) async -> [DiffFile] {
+        guard let workspace = workspace(id) else { return [] }
+        let git = await config().git
+        return (try? await git.changedFiles(in: workspace.path, base: await diffBase(workspace, git: git))) ?? []
+    }
+
+    /// One file's unified diff against where the branch left its base.
     public func diff(of file: DiffFile, in id: UUID) async throws -> String {
         guard let workspace = workspace(id) else { throw EngineError.unknownWorkspace }
-        return try await config().git.diff(of: file, in: workspace.path, base: workspace.baseCommit)
+        let git = await config().git
+        return try await git.diff(of: file, in: workspace.path, base: await diffBase(workspace, git: git))
     }
 
     // MARK: - Branch actions
@@ -363,8 +419,9 @@ public actor WorkspaceEngine {
     /// about its PR — slower, so callers do it less often.
     public func branchState(_ id: UUID, network: Bool) async -> BranchState? {
         guard let workspace = workspace(id) else { return nil }
-        let state = await config().git.branchState(
-            worktree: workspace.path, base: workspace.baseCommit, branch: workspace.branch,
+        let git = await config().git
+        let state = await git.branchState(
+            worktree: workspace.path, base: await diffBase(workspace, git: git), branch: workspace.branch,
             gh: ghPath, network: network, previousPR: pullRequests[id])
         if self.workspace(id) != nil { pullRequests[id] = state.pr }
         return state
@@ -488,8 +545,9 @@ public actor WorkspaceEngine {
 
     private func pullRequestText(for workspace: Workspace, config: EngineConfig) async -> (String, String) {
         let git = config.git
-        let log = (try? await git.output(["log", "--format=%s%n%b", "\(workspace.baseCommit)..HEAD"], in: workspace.path)) ?? ""
-        let diff = (try? await git.output(["diff", "\(workspace.baseCommit)...HEAD"], in: workspace.path)) ?? ""
+        let base = await diffBase(workspace, git: git)
+        let log = (try? await git.output(["log", "--no-merges", "--format=%s%n%b", "\(base)..HEAD"], in: workspace.path)) ?? ""
+        let diff = (try? await git.output(["diff", "\(base)...HEAD"], in: workspace.path)) ?? ""
         let prompt = """
         Write a GitHub pull request for this branch. Output the title on the first line \
         (under 72 characters, no prefix like "Title:"), then a blank line, then a concise markdown \

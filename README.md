@@ -13,17 +13,38 @@ Installed copies update themselves through Sparkle.
 
 - **Repos:** add a local git repo, or clone one from a URL.
 - **Workspaces:** each new workspace is a fresh `git worktree` on its own
-  `psyduck/<duck-name>` branch, cut from the repo's default branch. Your own
-  checkout is never touched.
+  `psyduck/<duck-name>` branch, cut from the default branch as it is upstream
+  (`origin/main` or `origin/master`, fetched first). Your own checkout is
+  never touched.
 - **Chat:** one claude session per workspace, running inside the worktree.
   Replies stream in, tool calls show as rows, and each turn resumes the same
   claude session (`--resume`).
 - **Changes panel:** the right-hand panel lists every file the workspace has
-  changed since its base commit (committed, uncommitted and untracked). Click
-  one to read its diff.
+  changed since its base branch (committed, uncommitted and untracked). Click
+  one to open its diff in a tab beside the session; Esc or the × closes it.
 - **Settings:** the claude path (auto-detected, overridable), permission
   mode, model, git path and where worktrees go.
+- **Rename:** right-click a workspace to rename it. Its branch is renamed
+  with it (`psyduck/<name>`, or the name as typed if it has a slash, like
+  `fix/login`).
 - Archiving a workspace removes its worktree and keeps the branch.
+
+## Desk
+
+The second icon in the left rail (⌘2; ⌘1 goes back to code) is **desk**: your
+open pull requests across GitHub, and claude reviews of them. It used to be a
+separate app, tsukue.
+
+- **Pull requests:** the ones waiting for your review and the ones you
+  opened, with checks and review state, through your `gh` login.
+- **Reviews:** a team of claude agents reads a PR and reports what it found.
+  They can only read. Review requests are reviewed in the background as they
+  arrive (you can turn that off in desk's settings).
+- **Posting:** turn a review into a draft, edit it by hand or by chat, and
+  post it to GitHub. Or approve, one PR or several. Nothing is written to
+  GitHub until you press the button.
+- Desk does nothing until you open it. If you used tsukue, its reviews,
+  drafts and settings are copied over the first time psyduck starts.
 
 You need [Claude Code](https://docs.claude.com/en/docs/claude-code) installed
 and signed in. psyduck runs your `claude` binary; it doesn't call the API

@@ -69,26 +69,46 @@ struct ChatView: View {
 
     // MARK: Transcript
 
-    /// The transcript as turns: each of your messages, then everything
-    /// Claude did in reply, grouped under one avatar.
-    private var turns: [Turn] {
-        var result: [Turn] = []
+    /// The transcript as flat rows: each of your messages, then everything
+    /// Claude did in reply under one avatar. Flat, so the stack can be lazy
+    /// and a long session builds only the rows on screen.
+    private var rows: [Row] {
+        var rows: [Row] = []
+        var inReply = false
+        var turn = 0
+        func openReply() {
+            if !inReply { rows.append(.claude(turn)); inReply = true }
+        }
+        let items = self.items
+        let lastID = running ? items.last?.id : nil
         for item in items {
             if item.kind == .user {
-                result.append(Turn(user: item, reply: []))
-            } else if result.isEmpty {
-                result.append(Turn(user: nil, reply: [item]))
+                rows.append(.user(item))
+                inReply = false
+                turn += 1
             } else {
-                result[result.count - 1].reply.append(item)
+                openReply()
+                rows.append(.item(item, active: item.id == lastID))
             }
         }
-        return result
+        if running {
+            let partial = session.streaming
+            if !partial.isEmpty {
+                openReply()
+                rows.append(.partial(partial))
+            } else if !inReply || items.last?.kind != .tool {
+                openReply()
+                rows.append(.thinking)
+            }
+        }
+        if let queued = session.queued { rows.append(.queued(queued)) }
+        return rows
     }
 
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     if items.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("New workspace").font(.display(22))
@@ -96,29 +116,32 @@ struct ChatView: View {
                                 .font(.sans(13)).foregroundStyle(Tk.inkMuted)
                             Text(workspace.path).font(.mono(12)).foregroundStyle(Tk.inkMuted).textSelection(.enabled)
                         }
+                        .padding(.bottom, 24)
                     }
-                    let turns = self.turns
-                    ForEach(Array(turns.enumerated()), id: \.offset) { index, turn in
-                        if let user = turn.user { UserBubble(text: user.text) }
-                        let isLast = index == turns.count - 1
-                        let partial = isLast ? session.streaming : ""
-                        if !turn.reply.isEmpty || (isLast && running) {
-                            ClaudeTurn(items: turn.reply, partial: partial, running: isLast && running)
-                        }
+                    let rows = self.rows
+                    ForEach(rows) { row in
+                        RowView(row: row, first: row.id == rows.first?.id).equatable()
                     }
-                    if let queued = session.queued {
-                        UserBubble(text: queued, queued: true)
-                    }
-                    Color.clear.frame(height: 1).id("bottom")
+                    Color.clear.frame(height: 1).padding(.top, 24).id("bottom")
                 }
                 .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 24)
                 .padding(.vertical, 32)
             }
+            // Pinned to the bottom, so a block above the fold changing height
+            // doesn't shove what you're reading around.
+            .defaultScrollAnchor(.bottom)
             .onChange(of: items.count) { proxy.scrollTo("bottom", anchor: .bottom) }
             .onChange(of: session.streaming) { proxy.scrollTo("bottom", anchor: .bottom) }
-            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+            .task {
+                // A lazy stack only guesses its height at first, and can open
+                // scrolled past its rows. Go to the end once it has settled.
+                for delay in [0, 60, 250] {
+                    try? await Task.sleep(for: .milliseconds(delay))
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
+            }
         }
     }
 
@@ -199,9 +222,63 @@ struct ChatView: View {
     }
 }
 
-private struct Turn {
-    var user: ChatItem?
-    var reply: [ChatItem]
+/// One row of the transcript.
+private enum Row: Identifiable, Equatable {
+    case user(ChatItem)
+    /// The avatar and name that open Claude's reply in a turn.
+    case claude(Int)
+    /// `active` is the tool call Claude is in the middle of.
+    case item(ChatItem, active: Bool)
+    /// Text still streaming in.
+    case partial(String)
+    case thinking
+    case queued(String)
+
+    var id: String {
+        switch self {
+        case .user(let item), .item(let item, _): return item.id.uuidString
+        case .claude(let turn): return "claude-\(turn)"
+        case .partial: return "partial"
+        case .thinking: return "thinking"
+        case .queued: return "queued"
+        }
+    }
+}
+
+/// Equatable, so a row whose content didn't change is not rebuilt when the
+/// store publishes — which it does for every bit of streamed text.
+private struct RowView: View, Equatable {
+    let row: Row
+    let first: Bool
+
+    /// Replies sit to the right of the avatar: its 24px and a 12px gap.
+    private let inset: CGFloat = 36
+
+    var body: some View {
+        switch row {
+        case .user(let item):
+            UserBubble(text: item.text).padding(.top, first ? 0 : 24)
+        case .queued(let text):
+            UserBubble(text: text, queued: true).padding(.top, first ? 0 : 24)
+        case .claude:
+            Text("Claude").font(.sans(12, .semibold)).foregroundStyle(Tk.inkMuted)
+                .padding(.leading, inset)
+                .overlay(alignment: .topLeading) {
+                    Circle()
+                        .fill(Tk.pop)
+                        .frame(width: 24, height: 24)
+                        .overlay(Image(systemName: "asterisk").font(.system(size: 11, weight: .bold)).foregroundStyle(Tk.onBrand))
+                        .accessibilityHidden(true)
+                }
+                .padding(.top, first ? 0 : 24)
+        case .item(let item, let active):
+            ItemView(item: item, active: active).padding(.leading, inset).padding(.top, 10)
+        case .partial(let text):
+            Prose(text: text).padding(.leading, inset).padding(.top, 10)
+        case .thinking:
+            Text("Thinking…").font(.sans(13)).foregroundStyle(Tk.inkFaint).padding(.leading, inset).padding(.top, 10)
+        }
+    }
 }
 
 private struct UserBubble: View {
@@ -229,35 +306,6 @@ private struct UserBubble: View {
                     Text("queued: sends when Claude is done").font(.sans(12)).foregroundStyle(Tk.inkFaint)
                 }
             }
-        }
-    }
-}
-
-/// Everything Claude did in one turn, under the coral avatar.
-private struct ClaudeTurn: View {
-    let items: [ChatItem]
-    let partial: String
-    let running: Bool
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Circle()
-                .fill(Tk.pop)
-                .frame(width: 24, height: 24)
-                .overlay(Image(systemName: "asterisk").font(.system(size: 11, weight: .bold)).foregroundStyle(Tk.onBrand))
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Claude").font(.sans(12, .semibold)).foregroundStyle(Tk.inkMuted)
-                ForEach(items) { item in
-                    ItemView(item: item, active: running && item.id == items.last?.id)
-                }
-                if !partial.isEmpty {
-                    Prose(text: partial)
-                } else if running && (items.last?.kind != .tool) {
-                    Text("Thinking…").font(.sans(13)).foregroundStyle(Tk.inkFaint)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
@@ -414,6 +462,10 @@ private struct TerminalBlock: View {
                     .padding(.vertical, 12)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            // A legacy (mouse) scroller takes ~14pt of height and comes and
+            // goes between layout passes, which made the whole transcript
+            // jitter. Trackpad and shift-scroll still scroll sideways.
+            .scrollIndicators(.never)
         }
         .background(Tk.bg000)
         .clipShape(RoundedRectangle(cornerRadius: Tk.radiusLg, style: .continuous))

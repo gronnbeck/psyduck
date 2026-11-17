@@ -1,7 +1,7 @@
 import PsyduckCore
 import SwiftUI
 
-/// One file's diff, opened wide in the center pane.
+/// One file's diff, in its tab in the center pane.
 struct DiffView: View {
     @EnvironmentObject private var store: AppStore
     let workspace: Workspace
@@ -13,12 +13,7 @@ struct DiffView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PaneHeader(leading: 12, trailing: 16) {
-                Button { store.openDiff[workspace.id] = nil } label: {
-                    Label("Session", systemImage: "chevron.left")
-                }
-                .buttonStyle(.tkGhost)
-                .keyboardShortcut(.escape, modifiers: [])
+            PaneHeader(leading: 24, trailing: 12) {
                 Text(file.path).font(.mono(13, .medium)).lineLimit(1).truncationMode(.head).textSelection(.enabled)
                 Spacer()
                 if let a = file.additions, let d = file.deletions {
@@ -26,6 +21,12 @@ struct DiffView: View {
                     Text("−\(d)").font(.mono(12)).foregroundStyle(Tk.danger)
                 }
                 Text("vs \(workspace.baseRef)").font(.mono(12)).foregroundStyle(Tk.inkFaint)
+                Button { store.closeDiff(file.path, in: workspace.id) } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.tkIcon())
+                .keyboardShortcut(.escape, modifiers: [])
+                .help("Close this diff (Esc)")
             }
 
             if let error {
@@ -68,8 +69,6 @@ struct DiffView: View {
 /// Diff lines, Tinker style: tinted rows, coloured line numbers.
 struct DiffLines: View {
     let lines: [DiffLine]
-    /// The panel's narrow card: one number column instead of two.
-    var compact = false
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 0) {
@@ -82,12 +81,8 @@ struct DiffLines: View {
 
     private func row(_ line: DiffLine) -> some View {
         HStack(spacing: 0) {
-            if compact {
-                number(line.newNumber ?? line.oldNumber, color: numberColor(line))
-            } else {
-                number(line.oldNumber, color: numberColor(line))
-                number(line.newNumber, color: numberColor(line))
-            }
+            number(line.oldNumber, color: numberColor(line))
+            number(line.newNumber, color: numberColor(line))
             Text(marker(line))
                 .frame(width: 14, alignment: .leading)
                 .foregroundStyle(line.kind == .added ? Tk.success : Tk.danger)
