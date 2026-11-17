@@ -11,6 +11,32 @@ stop, start, list and destroy it.
 Assumes the Mac already has AWS access: the `aws` CLI with a profile that can
 create the resources listed under [IAM](#iam-the-macs-profile).
 
+## Without the Mac side: the bootstrap script
+
+If you already have a machine (an EC2 instance you made by hand, or any
+Ubuntu or Debian box), `scripts/bootstrap-host.sh` does the on-machine part
+alone. Download it onto the machine and run it as the user psyduck will run
+as:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/gronnbeck/psyduck/main/scripts/bootstrap-host.sh
+bash bootstrap-host.sh
+```
+
+It installs git, gh and claude, makes `~/psyduck/{repos,workspaces}`, turns on
+linger, then runs the claude and GitHub logins and asks for a git identity.
+It uses sudo for the system parts, takes no secrets as arguments, and can be
+run again: it skips what is already there.
+
+| Option | Does |
+|---|---|
+| `--no-login` | Install only. Use this when there is no terminal, for example as EC2 user data |
+| `--login-only` | Only the logins |
+| `--user NAME` | When run as root: the user to set up (default: whoever called sudo, else `ubuntu`) |
+
+It creates nothing in AWS. It doesn't install `psyduckd`, which doesn't ship
+yet ([REMOTE.md](REMOTE.md), phase 2).
+
 ## Commands
 
 These are part of the `psyduck` CLI and run on the Mac. They shell out to
