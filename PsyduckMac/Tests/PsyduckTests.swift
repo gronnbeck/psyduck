@@ -397,3 +397,49 @@ extension LiveClaudeTests {
         XCTAssertEqual(store.primaryAction(for: workspace.id), .createPR)
     }
 }
+
+final class EnvFileTests: XCTestCase {
+    func testParsesKeysValuesCommentsAndQuotes() {
+        let values = EnvFile.parse("""
+        # Settings for psyduck on this machine
+        CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat-abc=def
+
+        export GH_HOST = "github.example.com"
+        NAME='two words'
+        EMPTY=
+        not a setting
+        1BAD=x
+        NAME=later wins
+        """)
+        XCTAssertEqual(values, [
+            "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat-abc=def",
+            "GH_HOST": "github.example.com",
+            "NAME": "later wins",
+            "EMPTY": "",
+        ])
+    }
+
+    func testAMissingFileIsEmpty() {
+        XCTAssertEqual(EnvFile.load(URL(fileURLWithPath: "/nonexistent/psyduck/.env")), [:])
+    }
+
+    func testTheFileWinsOverTheInheritedEnvironmentAndPathKeepsItsAdditions() {
+        let env = Shell.environment(inherited: ["TOKEN": "old", "KEEP": "1", "PATH": "/usr/bin"],
+                                    file: ["TOKEN": "new", "PATH": "/custom/bin"])
+        XCTAssertEqual(env["TOKEN"], "new")
+        XCTAssertEqual(env["KEEP"], "1")
+        XCTAssertTrue(env["PATH"]!.hasSuffix(":/custom/bin"))
+        XCTAssertTrue(env["PATH"]!.contains("/opt/homebrew/bin"))
+    }
+
+    func testAToolSeesTheFilesValues() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("env-\(UUID())")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent(".env")
+        try "PSYDUCK_TEST_VALUE=from the file\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let env = Shell.environment(inherited: [:], file: EnvFile.load(file))
+        XCTAssertEqual(env["PSYDUCK_TEST_VALUE"], "from the file")
+    }
+}

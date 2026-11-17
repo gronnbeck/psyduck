@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # Sets up a Linux machine (Ubuntu or Debian) to run psyduck sessions:
-# git, gh, claude, the directories psyduck uses, and the claude and GitHub
-# logins. Safe to run again; it skips what is already there.
+# git, gh, claude, the directories psyduck uses, and a guided setup of the
+# claude login, the GitHub login and your git identity. Safe to run again; it
+# skips what is already there, and ends by listing what is set up and what
+# isn't.
+#
+# Settings for psyduck on this machine live in ~/.config/psyduck/.env
+# (KEY=VALUE lines, mode 600). The claude token is saved there; add anything
+# else your sessions need.
 #
 #   curl -fsSLO https://raw.githubusercontent.com/gronnbeck/psyduck/main/scripts/bootstrap-host.sh
 #   bash bootstrap-host.sh
@@ -20,6 +26,9 @@ Usage: bootstrap-host.sh [options]
                  root, whoever called sudo, else "ubuntu".
   --no-login     Install only. Skip the claude and GitHub logins.
   --login-only   Only the logins. Skip the install.
+  --status       Only show what is set up and what is missing.
+
+Logins and other settings are kept in ~/.config/psyduck/.env.
   -h, --help     Show this.
 EOF
 }
@@ -27,6 +36,7 @@ EOF
 target_user=""
 do_install=1
 do_login=1
+env_file_name=".config/psyduck/.env"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -34,6 +44,7 @@ while [ $# -gt 0 ]; do
         --user=*) target_user="${1#--user=}"; shift ;;
         --no-login) do_login=0; shift ;;
         --login-only) do_install=0; shift ;;
+        --status) do_install=0; do_login=0; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -97,8 +108,15 @@ install_packages() {
 install_directories() {
     step "Directories"
     as_user 'mkdir -p "$HOME/psyduck/repos" "$HOME/psyduck/workspaces" "$HOME/.local/bin"
-             install -d -m 700 "$HOME/.config/psyduck"'
+             install -d -m 700 "$HOME/.config/psyduck"
+             file="$HOME/$1"
+             [ -e "$file" ] && exit 0
+             umask 177
+             printf "%s\n" \
+                 "# Settings for psyduck on this machine, one KEY=VALUE per line." \
+                 "# psyduck passes them to claude, git and gh. Keep this file private." > "$file"' "$env_file_name"
     echo "$target_home/psyduck"
+    echo "$target_home/$env_file_name"
 }
 
 install_claude() {
@@ -125,26 +143,38 @@ enable_linger() {
 }
 
 login_claude() {
-    step "claude login"
-    if [ -s "$target_home/.config/psyduck/env" ]; then
-        echo "A claude token is already saved in ~/.config/psyduck/env. Delete that file to log in again."
+    step "claude login (1 of 3)"
+    if grep -qs '^CLAUDE_CODE_OAUTH_TOKEN=.' "$target_home/$env_file_name"; then
+        echo "A claude token is already in ~/$env_file_name. Remove that line to log in again."
         return
     fi
+    cat <<'EOF'
+This gives claude on this machine a long-lived token for your account:
+  1. claude prints a URL. Open it in a browser on any computer and sign in.
+  2. Paste the code from the browser back here.
+  3. claude prints a token starting with sk-ant-oat. Paste it at the prompt
+     that follows, and it is saved for psyduck.
+EOF
     as_user '
-        echo "Open the URL claude prints, and paste the code back here."
         claude setup-token
         echo
-        read -rsp "Paste the token printed above, to save it for psyduck (Enter skips): " token
+        read -rsp "Paste the token printed above (Enter skips): " token
         echo
         [ -n "$token" ] || { echo "No token given, nothing saved."; exit 0; }
-        install -d -m 700 "$HOME/.config/psyduck"
+        file="$HOME/$1"
+        install -d -m 700 "$(dirname "$file")"
         umask 177
-        printf "CLAUDE_CODE_OAUTH_TOKEN=%s\n" "$token" > "$HOME/.config/psyduck/env"
-        echo "Saved to ~/.config/psyduck/env (mode 600)."'
+        touch "$file"
+        # Replace an older token, keep every other line.
+        tmp="$(mktemp "$file.XXXXXX")"
+        grep -v "^CLAUDE_CODE_OAUTH_TOKEN=" "$file" > "$tmp" || true
+        printf "CLAUDE_CODE_OAUTH_TOKEN=%s\n" "$token" >> "$tmp"
+        mv "$tmp" "$file"
+        echo "Saved to ~/$1 (only you can read it)."' "$env_file_name"
 }
 
 login_github() {
-    step "GitHub login"
+    step "GitHub login (2 of 3)"
     if as_user 'gh auth status --hostname github.com >/dev/null 2>&1'; then
         echo "gh is already logged in."
     else
@@ -153,6 +183,10 @@ Agents on this machine run without asking permission, and can use whatever
 this login can reach. A fine-grained token limited to the repos you'll work
 on here is the safer choice:
 https://github.com/settings/personal-access-tokens/new
+
+gh asks how to log in next. Pick "Paste an authentication token" for a token
+like that, or "Login with a web browser" for your whole account. gh keeps the
+login itself, in ~/.config/gh.
 EOF
         as_user 'gh auth login --hostname github.com --git-protocol https'
     fi
@@ -160,7 +194,7 @@ EOF
 }
 
 set_git_identity() {
-    step "git identity"
+    step "git identity (3 of 3)"
     local key label value
     for key in user.name user.email; do
         if value="$(as_user 'git config --global "$1"' "$key")" && [ -n "$value" ]; then
@@ -190,8 +224,43 @@ if [ "$do_login" -eq 1 ]; then
     fi
 fi
 
-step "Done"
-as_user 'printf "git     %s\ngh      %s\nclaude  %s\n" \
-    "$(git --version 2>/dev/null || echo missing)" \
-    "$(gh --version 2>/dev/null | head -n 1 || echo missing)" \
-    "$(claude --version 2>/dev/null || echo missing)"'
+# What is set up, and the command that fixes each thing that isn't.
+show_status() {
+    step "Setup"
+    as_user '
+        ok() { printf "  ok       %s\n" "$1"; }
+        missing() { printf "  missing  %s\n           %s\n" "$1" "$2"; }
+        have() { command -v "$1" >/dev/null 2>&1; }
+        check() { if have "$1"; then ok "$2"; else missing "$1" "run: bash bootstrap-host.sh"; fi; }
+
+        check git "$(git --version 2>/dev/null)"
+        check gh "$(gh --version 2>/dev/null | head -n 1)"
+        check claude "claude $(claude --version 2>/dev/null)"
+
+        if grep -qs "^CLAUDE_CODE_OAUTH_TOKEN=." "$HOME/$1"; then
+            ok "claude login (token in ~/$1)"
+        else
+            missing "claude login" "run: bash bootstrap-host.sh --login-only"
+        fi
+        if have gh && gh auth status --hostname github.com >/dev/null 2>&1; then
+            ok "GitHub login"
+        else
+            missing "GitHub login" "run: bash bootstrap-host.sh --login-only"
+        fi
+        name="$(git config --global user.name 2>/dev/null || true)"
+        email="$(git config --global user.email 2>/dev/null || true)"
+        if [ -n "$name" ] && [ -n "$email" ]; then
+            ok "git identity ($name <$email>)"
+        else
+            missing "git identity" "run: git config --global user.name \"Your Name\"; git config --global user.email you@example.com"
+        fi
+        if [ -d "$HOME/psyduck/workspaces" ]; then
+            ok "$HOME/psyduck"
+        else
+            missing "$HOME/psyduck" "run: bash bootstrap-host.sh"
+        fi
+        echo
+        echo "Settings file: ~/$1"' "$env_file_name"
+}
+
+show_status

@@ -24,15 +24,31 @@ bash bootstrap-host.sh
 ```
 
 It installs git, gh and claude, makes `~/psyduck/{repos,workspaces}`, turns on
-linger, then runs the claude and GitHub logins and asks for a git identity.
-It uses sudo for the system parts, takes no secrets as arguments, and can be
-run again: it skips what is already there.
+linger, then walks you through three things: the claude login, the GitHub
+login and your git identity. It ends with a list of what is set up and what
+is missing, with the command that fixes each. It uses sudo for the system
+parts, takes no secrets as arguments, and can be run again: it skips what is
+already there.
 
 | Option | Does |
 |---|---|
 | `--no-login` | Install only. Use this when there is no terminal, for example as EC2 user data |
 | `--login-only` | Only the logins |
+| `--status` | Only the list of what is set up and what is missing |
 | `--user NAME` | When run as root: the user to set up (default: whoever called sudo, else `ubuntu`) |
+
+### The settings file: `~/.config/psyduck/.env`
+
+psyduck's settings on a machine are `KEY=VALUE` lines in
+`~/.config/psyduck/.env` (mode 600). psyduck reads the file every time it
+starts claude, git or gh, and puts the values in that tool's environment, on
+top of its own. An edit applies to the next command.
+
+- The script saves the claude login there as `CLAUDE_CODE_OAUTH_TOKEN`.
+- The GitHub login is not in the file. `gh` keeps it in `~/.config/gh`.
+- Add anything else your sessions need, for example `ANTHROPIC_MODEL=…` or
+  a registry token. `#` starts a comment; values are not expanded.
+- The Mac app reads the same file if you make one.
 
 It creates nothing in AWS. It doesn't install `psyduckd`, which doesn't ship
 yet ([REMOTE.md](REMOTE.md), phase 2).

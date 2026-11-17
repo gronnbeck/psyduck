@@ -36,7 +36,13 @@ enum Shell {
     static let home = FileManager.default.homeDirectoryForCurrentUser.path
 
     static var environment: [String: String] {
-        var env = ProcessInfo.processInfo.environment
+        environment(inherited: ProcessInfo.processInfo.environment, file: EnvFile.load())
+    }
+
+    /// What a child process gets: psyduck's own environment, then the
+    /// settings file on top (see `EnvFile`), then the PATH additions.
+    static func environment(inherited: [String: String], file: [String: String]) -> [String: String] {
+        var env = inherited.merging(file) { _, fromFile in fromFile }
         let extra = ["/opt/homebrew/bin", "/usr/local/bin", "\(home)/.local/bin", "\(home)/.claude/local"]
         let current = env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
         env["PATH"] = (extra + [current]).joined(separator: ":")
