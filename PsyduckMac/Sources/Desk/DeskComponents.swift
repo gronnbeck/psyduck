@@ -215,7 +215,8 @@ struct InkField: View {
     }
 }
 
-/// DeskProse with `code` spans set in mono on a raised wash.
+/// Text with its inline markdown shown: `code` in mono on a raised wash,
+/// bold, italic, struck-through, and links you can click.
 struct SegmentedText: View {
     let text: String
     var size: CGFloat = 14
@@ -232,13 +233,21 @@ struct SegmentedText: View {
 
     private var attributed: AttributedString {
         var result = AttributedString()
-        for segment in DeskProse.segments(text) {
-            var run = AttributedString(segment.isCode ? "\u{2009}\(segment.text)\u{2009}" : segment.text)
-            if segment.isCode {
+        for span in DeskProse.spans(text) {
+            var run = AttributedString(span.code ? "\u{2009}\(span.text)\u{2009}" : span.text)
+            if span.code {
                 run.font = .mono(size * 0.88)
                 run.backgroundColor = Ink.bg300
             } else {
-                run.font = .sans(size, weight)
+                let heavy = span.bold || weight != .regular
+                // Inter is bundled upright only, so italics are the system's.
+                run.font = span.italic ? .system(size: size, weight: heavy ? .semibold : .regular).italic()
+                    : .sans(size, span.bold ? .semibold : weight)
+            }
+            if span.strike { run.strikethroughStyle = .single }
+            if let link = span.link {
+                run.link = link
+                run.foregroundColor = Ink.info
             }
             result += run
         }

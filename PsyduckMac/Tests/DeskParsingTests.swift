@@ -97,10 +97,58 @@ final class ProseTests: XCTestCase {
         let blocks = DeskProse.blocks(body)
 
         XCTAssertEqual(blocks.map(\.kind), [.paragraph, .item, .item, .heading, .paragraph])
-        XCTAssertEqual(blocks[0].text, "Moves `middleware/auth.ts` to the edge runtime.")
-        XCTAssertEqual(blocks[2].text, "caches sessions for 60s")
+        // A line break in the description stays one, as on GitHub.
+        XCTAssertEqual(blocks[0].text, "Moves `middleware/auth.ts` to the edge\nruntime.")
+        XCTAssertEqual(DeskProse.plain(blocks[2].text), "caches sessions for 60s")
         XCTAssertEqual(blocks[3].text, "Testing")
-        XCTAssertEqual(blocks[4].text, "Passes locally.")
+        XCTAssertEqual(blocks[3].level, 2)
+        XCTAssertEqual(DeskProse.plain(blocks[4].text), "Passes locally.")
+    }
+
+    func testReadsInlineMarkdown() {
+        let spans = DeskProse.spans("a **bold** and *slanted* `snake_case*` word, ~~gone~~, [docs](https://example.com/a_b), https://example.com/x_y. 2 * 3 * 4 my_var_name")
+
+        XCTAssertEqual(spans.filter(\.bold).map(\.text), ["bold"])
+        XCTAssertEqual(spans.filter(\.italic).map(\.text), ["slanted"])
+        XCTAssertEqual(spans.filter(\.code).map(\.text), ["snake_case*"])
+        XCTAssertEqual(spans.filter(\.strike).map(\.text), ["gone"])
+        XCTAssertEqual(spans.compactMap(\.link).map(\.absoluteString), ["https://example.com/a_b", "https://example.com/x_y"])
+        XCTAssertEqual(spans.last?.text, ". 2 * 3 * 4 my_var_name")
+    }
+
+    /// GitHub sends \r\n. Read as two line breaks, every line became its own
+    /// paragraph and no table was ever found.
+    func testReadsTablesCodeAndNestedLists() {
+        let body = [
+            "Measured:",
+            "| Scenario | Før | Etter | |",
+            "|---|---|---|---|",
+            "| `Builder.build(a | b)` : makes it | 1178 | 432 | −63% |",
+            "",
+            "```ruby",
+            "<details>",
+            "  insert_all # not *markup*",
+            "```",
+            "",
+            "1. first",
+            "   wrapped",
+            "   - [x] nested",
+            "> quoted **text**",
+            "",
+            "#1489 is not a heading",
+        ].joined(separator: "\r\n")
+
+        let blocks = DeskProse.blocks(body)
+
+        XCTAssertEqual(blocks.map(\.kind), [.paragraph, .table, .code, .item, .item, .quote, .paragraph])
+        XCTAssertEqual(blocks[1].rows, [["Scenario", "Før", "Etter", ""], ["`Builder.build(a | b)` : makes it", "1178", "432", "−63%"]])
+        XCTAssertEqual(blocks[2].text, "<details>\n  insert_all # not *markup*")
+        XCTAssertEqual(blocks[3].text, "first\nwrapped")
+        XCTAssertEqual(blocks[3].marker, "1.")
+        XCTAssertEqual([blocks[4].level, blocks[3].level], [1, 0])
+        XCTAssertEqual(blocks[4].marker, "[x]")
+        XCTAssertEqual(blocks[5].children.map(\.text), ["quoted **text**"])
+        XCTAssertEqual(blocks[6].text, "#1489 is not a heading")
     }
 
     /// Dependabot writes HTML inside markdown, with the release notes,
@@ -137,13 +185,14 @@ final class ProseTests: XCTestCase {
         let blocks = DeskProse.blocks(body)
 
         XCTAssertEqual(blocks.map(\.kind), [.paragraph, .paragraph, .details, .details])
-        XCTAssertEqual(blocks[0].text, "Bumps the bundler-minor group with 1 update: faraday.")
+        XCTAssertEqual(DeskProse.plain(blocks[0].text), "Bumps the bundler-minor group with 1 update: faraday.")
         XCTAssertEqual(blocks[2].text, "Release notes")
         let notes = blocks[2].children
         XCTAssertEqual(notes.map(\.kind), [.paragraph, .heading, .item, .item])
-        XCTAssertEqual(notes[0].text, "Sourced from faraday's releases.")
+        XCTAssertEqual(DeskProse.plain(notes[0].text), "Sourced from faraday's releases.")
+        XCTAssertEqual(DeskProse.spans(notes[0].text).compactMap(\.link).first?.absoluteString, "https://github.com/lostisland/faraday/releases")
         XCTAssertEqual(notes[1].text, "What's Changed")
-        XCTAssertEqual(notes[2].text, "Fix typo in `Faraday::Connection#options` doc by `@Bo98` in lostisland/faraday#1674")
+        XCTAssertEqual(DeskProse.plain(notes[2].text), "Fix typo in Faraday::Connection#options doc by @Bo98 in lostisland/faraday#1674")
         XCTAssertEqual(notes[3].text, "gemspec: Relax faraday-net_http to < 3.6")
         XCTAssertEqual(blocks[3].children.first?.text, "`@dependabot ignore <dependency name> minor version` will close this group update PR")
         XCTAssertFalse(blocks.flatMap { [$0.text] + $0.children.map(\.text) }.contains { $0.contains("<a ") || $0.contains("</") })

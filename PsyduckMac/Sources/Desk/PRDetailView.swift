@@ -61,24 +61,108 @@ private struct ProseList: View {
     let blocks: [ProseBlock]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
-                switch block.kind {
-                case .heading:
-                    SegmentedText(text: block.text, size: 13, weight: .semibold, color: Ink.ink)
-                        .padding(.top, index == 0 ? 0 : 8)
-                case .item:
-                    HStack(alignment: .firstTextBaseline, spacing: 10) {
-                        Text("–").font(.sans(14)).foregroundStyle(Ink.inkMuted)
+                Group {
+                    switch block.kind {
+                    case .heading:
+                        SegmentedText(text: block.text, size: block.level <= 2 ? 17 : block.level == 3 ? 15 : 14, weight: .semibold)
+                    case .item:
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            ItemMarker(marker: block.marker)
+                            SegmentedText(text: block.text)
+                        }
+                        .padding(.leading, CGFloat(block.level) * 22)
+                    case .paragraph:
                         SegmentedText(text: block.text)
+                    case .code:
+                        ProseCode(text: block.text)
+                    case .table:
+                        ProseTable(rows: block.rows)
+                    case .quote:
+                        // Type-erased: a quote can hold anything a description can.
+                        AnyView(ProseList(blocks: block.children))
+                            .padding(.leading, 16)
+                            .overlay(alignment: .leading) { Rectangle().fill(Ink.lineStrong).frame(width: 2) }
+                            .opacity(0.85)
+                    case .details:
+                        DetailsSection(block: block)
                     }
-                case .paragraph:
-                    SegmentedText(text: block.text)
-                case .details:
-                    DetailsSection(block: block)
+                }
+                .padding(.top, index == 0 ? 0 : gap(before: block, after: blocks[index - 1]))
+            }
+        }
+    }
+
+    /// List items sit close together, a heading gets air above it, everything
+    /// else is a paragraph apart.
+    private func gap(before block: ProseBlock, after previous: ProseBlock) -> CGFloat {
+        switch (previous.kind, block.kind) {
+        case (.item, .item): return 6
+        case (_, .heading): return 22
+        case (.heading, _): return 8
+        case (_, .item), (.item, _): return 10
+        default: return 14
+        }
+    }
+}
+
+/// What a list item starts with: a dash, its number, or a task's checkbox.
+private struct ItemMarker: View {
+    let marker: String?
+
+    var body: some View {
+        switch marker {
+        case "[ ]": Image(systemName: "square").font(.system(size: 12)).foregroundStyle(Ink.inkMuted)
+        case "[x]": Image(systemName: "checkmark.square.fill").font(.system(size: 12)).foregroundStyle(Ink.brandText)
+        case let number?: Text(number).font(.mono(13)).foregroundStyle(Ink.inkMuted)
+        case nil: Text("–").font(.sans(14)).foregroundStyle(Ink.inkMuted)
+        }
+    }
+}
+
+/// A fenced code block: its lines as written, scrolling sideways if long.
+private struct ProseCode: View {
+    let text: String
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            Text(text.isEmpty ? " " : text)
+                .font(.mono(12.5))
+                .lineSpacing(5)
+                .foregroundStyle(Ink.ink)
+                .textSelection(.enabled)
+                .fixedSize()
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .inkBox(8, fill: Ink.bg100)
+    }
+}
+
+/// A table: a quieter header, a hairline between rows.
+private struct ProseTable: View {
+    let rows: [[String]]
+
+    var body: some View {
+        Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                if index > 0 {
+                    Rectangle().fill(Ink.line).frame(height: 1).gridCellUnsizedAxes(.horizontal)
+                }
+                GridRow {
+                    ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
+                        SegmentedText(text: cell, size: 13, weight: index == 0 ? .semibold : .regular,
+                                      color: index == 0 ? Ink.inkMuted : Ink.ink)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                    }
                 }
             }
         }
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .inkBox(8)
     }
 }
 
