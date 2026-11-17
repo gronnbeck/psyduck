@@ -58,25 +58,25 @@ struct DeskSidebar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // The traffic lights sit over the mode rail and reach a little
-            // into this corner.
-            Color.clear.frame(height: 36)
-
-            HStack(spacing: 10) {
-                Text("机")
-                    .font(.jp(18, .bold))
-                    .foregroundStyle(Ink.onBrand)
-                    .frame(width: 30, height: 30)
-                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Ink.brand))
-                    .keyLedge(6, color: Ink.brandLedge)
-                VStack(alignment: .leading, spacing: 1) {
-                    (Text("desk").foregroundStyle(Ink.ink) + Text(".").foregroundStyle(Ink.brandText))
-                        .font(.display(18)).tracking(-0.2)
-                    Text("v\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?") · your desk").font(.mono(11)).foregroundStyle(Ink.inkMuted)
+            // The same header as code's sidebar: desk is part of psyduck, not
+            // an app of its own.
+            PaneHeader(leading: 24) {
+                HStack(spacing: 0) {
+                    Text("psyduck").font(.display(22)).tracking(-0.4).foregroundStyle(Ink.ink)
+                    Text(".").font(.display(22)).foregroundStyle(Tk.brand)
                 }
+                Spacer()
             }
-            .padding(EdgeInsets(top: 4, leading: 8, bottom: 24, trailing: 8))
 
+            sections
+                .padding(EdgeInsets(top: 20, leading: 12, bottom: 16, trailing: 12))
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(Ink.bg100)
+    }
+
+    private var sections: some View {
+        VStack(alignment: .leading, spacing: 0) {
             Text("pull requests").microLabel().padding(EdgeInsets(top: 0, leading: 10, bottom: 8, trailing: 10))
 
             VStack(spacing: 2) {
@@ -103,9 +103,6 @@ struct DeskSidebar: View {
             .overlay(alignment: .top) { Rectangle().fill(Ink.line).frame(height: 1) }
             .padding(.top, 12)
         }
-        .padding(EdgeInsets(top: 0, leading: 12, bottom: 16, trailing: 12))
-        .frame(maxHeight: .infinity, alignment: .top)
-        .background(Ink.bg100)
     }
 }
 
