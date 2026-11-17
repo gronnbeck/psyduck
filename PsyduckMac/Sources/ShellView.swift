@@ -32,6 +32,7 @@ struct ShellView: View {
         .background(Tk.bg000)
         .foregroundStyle(Tk.ink)
         .ignoresSafeArea()
+        .sheet(item: $store.renaming) { RenameSheet(workspace: $0) }
         .alert("psyduck", isPresented: Binding(
             get: { store.errorMessage != nil },
             set: { if !$0 { store.errorMessage = nil } }
@@ -39,6 +40,58 @@ struct ShellView: View {
             Button("OK") { store.errorMessage = nil }
         } message: {
             Text(store.errorMessage ?? "")
+        }
+    }
+}
+
+/// Renames a workspace. Its branch is renamed with it.
+private struct RenameSheet: View {
+    @EnvironmentObject private var store: AppStore
+    let workspace: Workspace
+    @State private var name = ""
+    @State private var problem: String?
+    @State private var busy = false
+
+    private var cleaned: String { Workspace.cleanName(name) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Rename workspace").font(.display(22))
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Name").font(.sans(12, .medium)).foregroundStyle(Tk.inkMuted)
+                TkTextField(text: $name, placeholder: workspace.name)
+                    .onSubmit(rename)
+                Text("Branch: \(Workspace.branchName(for: cleaned.isEmpty ? workspace.name : cleaned))")
+                    .font(.mono(12)).foregroundStyle(Tk.inkFaint)
+                Text("The branch is renamed too. The worktree folder stays where it is.")
+                    .font(.sans(12)).foregroundStyle(Tk.inkFaint)
+                if let problem {
+                    Text(problem).font(.sans(12)).foregroundStyle(Tk.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            HStack(spacing: 8) {
+                Spacer()
+                Button("Cancel") { store.renaming = nil }.buttonStyle(.tkGhost)
+                    .keyboardShortcut(.cancelAction)
+                Button(busy ? "Renaming…" : "Rename", action: rename)
+                    .buttonStyle(.tkPrimary)
+                    .disabled(busy || cleaned.isEmpty || cleaned == workspace.name)
+            }
+        }
+        .padding(24)
+        .frame(width: 480)
+        .background(Tk.bg200)
+        .onAppear { name = workspace.name }
+    }
+
+    private func rename() {
+        guard !busy, !cleaned.isEmpty else { return }
+        busy = true
+        Task {
+            problem = await store.rename(workspace, to: name)
+            busy = false
+            if problem == nil { store.renaming = nil }
         }
     }
 }

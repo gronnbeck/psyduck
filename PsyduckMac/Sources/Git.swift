@@ -124,6 +124,15 @@ struct Git {
         (try? await output(["rev-parse", "--verify", "--quiet", "refs/heads/\(branch)"], in: repo)) != nil
     }
 
+    /// Renames a local branch, whichever worktree has it checked out. If it
+    /// was pushed, the link to the old remote branch is dropped, so the next
+    /// push makes a remote branch with the new name. The old one stays on
+    /// the remote.
+    func renameBranch(_ old: String, to new: String, repo: String) async throws {
+        try await output(["branch", "-m", old, new], in: repo)
+        _ = try? await output(["branch", "--unset-upstream", new], in: repo)
+    }
+
     // MARK: - Worktrees
 
     /// Cuts `branch` from `baseRef` into a new worktree at `directory`, and

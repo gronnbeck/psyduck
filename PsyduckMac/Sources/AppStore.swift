@@ -17,6 +17,8 @@ final class AppStore: ObservableObject {
     @Published var errorMessage: String?
     /// Settings is a page in the main window, over the chat and changes panes.
     @Published var showingSettings = false
+    /// The workspace whose rename sheet is open.
+    @Published var renaming: Workspace?
 
     /// Workspaces with a claude turn in flight.
     @Published private(set) var running: Set<UUID> = []
@@ -171,6 +173,43 @@ final class AppStore: ObservableObject {
     /// Soft-deletes a workspace: stops claude, saves any uncommitted work to
     /// a ref, removes the worktree and moves the record to `archive.json`,
     /// which isn't loaded at launch. The branch is kept.
+    /// Renames a workspace and its branch together. The worktree folder stays
+    /// where it is. Returns what went wrong, or nil.
+    @discardableResult
+    func rename(_ workspace: Workspace, to raw: String) async -> String? {
+        let name = Workspace.cleanName(raw)
+        guard !name.isEmpty else { return "Type a name." }
+        guard name != workspace.name else { return nil }
+        guard let index = workspaces.firstIndex(where: { $0.id == workspace.id }),
+              let repo = repo(for: workspace) else { return "That workspace is gone." }
+        guard !isRunning(workspace.id) else { return "Claude is working here. Stop it or wait, then rename." }
+        if let pr = branches[workspace.id]?.pr, pr.state == "OPEN" {
+            return "This branch has an open pull request (#\(pr.number)). Renaming it would leave the pull request behind."
+        }
+        guard !workspaces.contains(where: { $0.repoID == repo.id && $0.name == name }) else {
+            return "Another workspace is already called \(name)."
+        }
+
+        let branch = Workspace.branchName(for: name)
+        let git = settings.git
+        guard (try? await git.output(["check-ref-format", "--branch", branch], in: repo.path)) != nil else {
+            return "\(branch) isn't a valid branch name."
+        }
+        guard await !git.branchExists(branch, repo: repo.path) else {
+            return "A branch called \(branch) already exists."
+        }
+        do {
+            try await git.renameBranch(workspace.branch, to: branch, repo: repo.path)
+        } catch {
+            return "couldn't rename the branch: \(error.localizedDescription)"
+        }
+        workspaces[index].name = name
+        workspaces[index].branch = branch
+        save()
+        await refreshBranch(workspace.id, network: false)
+        return nil
+    }
+
     func archive(_ workspace: Workspace) async {
         stop(workspace.id)
         var archived = workspace

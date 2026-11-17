@@ -163,6 +163,7 @@ struct WorkspaceMenuItems: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(workspace.path, forType: .string)
         }
+        Button("Rename…") { store.renaming = workspace }
         Divider()
         Button("Archive") { Task { await store.archive(workspace) } }
     }

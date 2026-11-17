@@ -206,6 +206,40 @@ final class WorktreeTests: XCTestCase {
         XCTAssertTrue(workspace.branch.hasPrefix("psyduck/"))
         XCTAssertTrue(FileManager.default.fileExists(atPath: workspace.path + "/a.txt"))
 
+        // Renaming moves the name and the branch together; the folder stays.
+        let tip = try await Git(gitPath: "/usr/bin/git").output(["rev-parse", workspace.branch], in: repo)
+        let renameProblem = await store.rename(workspace, to: "  fix login ")
+        XCTAssertNil(renameProblem)
+        var renamed = try XCTUnwrap(store.selectedWorkspace)
+        XCTAssertEqual(renamed.name, "fix-login")
+        XCTAssertEqual(renamed.branch, "psyduck/fix-login")
+        XCTAssertEqual(renamed.path, workspace.path)
+        let movedTip = try await Git(gitPath: "/usr/bin/git").output(["rev-parse", "psyduck/fix-login"], in: repo)
+        XCTAssertEqual(movedTip, tip)
+        let checkedOut = try await Git(gitPath: "/usr/bin/git").output(["rev-parse", "--abbrev-ref", "HEAD"], in: workspace.path)
+        XCTAssertEqual(checkedOut, "psyduck/fix-login")
+        let oldBranchExists = await Git(gitPath: "/usr/bin/git").branchExists(workspace.branch, repo: repo)
+        XCTAssertFalse(oldBranchExists)
+
+        // A name with its own prefix is the branch as typed.
+        let prefixedProblem = await store.rename(renamed, to: "feat/login")
+        XCTAssertNil(prefixedProblem)
+        renamed = try XCTUnwrap(store.selectedWorkspace)
+        XCTAssertEqual(renamed.branch, "feat/login")
+
+        // Names git can't use, and branches that exist, are refused and change nothing.
+        let invalid = await store.rename(renamed, to: "bad..name")
+        XCTAssertNotNil(invalid)
+        try await Git(gitPath: "/usr/bin/git").output(["branch", "psyduck/taken"], in: repo)
+        let taken = await store.rename(renamed, to: "taken")
+        XCTAssertNotNil(taken)
+        XCTAssertEqual(store.selectedWorkspace?.branch, "feat/login")
+
+        // And back, so the rest of the test sees the workspace it started with.
+        let backProblem = await store.rename(renamed, to: workspace.name)
+        XCTAssertNil(backProblem)
+        XCTAssertEqual(store.selectedWorkspace, workspace)
+
         // Survives a relaunch.
         let reloaded = AppStore(settings: settings, stateURL: root.appendingPathComponent("state.json"))
         XCTAssertEqual(reloaded.workspaces.map(\.id), [workspace.id])

@@ -24,6 +24,9 @@ Installed copies update themselves through Sparkle.
   one to read its diff.
 - **Settings:** the claude path (auto-detected, overridable), permission
   mode, model, git path and where worktrees go.
+- **Rename:** right-click a workspace to rename it. Its branch is renamed
+  with it (`psyduck/<name>`, or the name as typed if it has a slash, like
+  `fix/login`).
 - Archiving a workspace removes its worktree and keeps the branch.
 
 ## Desk

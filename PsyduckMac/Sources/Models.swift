@@ -13,9 +13,23 @@ struct Repo: Codable, Identifiable, Hashable {
 struct Workspace: Codable, Identifiable, Hashable {
     var id = UUID()
     var repoID: UUID
-    /// Short, human name, also the last path component and the branch suffix.
+    /// Short, human name. The branch follows it (`branchName(for:)`), and a
+    /// rename changes both. The worktree folder keeps the name it was made
+    /// with: claude finds its session by that path.
     var name: String
     var branch: String
+
+    /// A typed name made safe for a branch: trimmed, spaces to dashes.
+    static func cleanName(_ raw: String) -> String {
+        raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: \.isWhitespace).joined(separator: "-")
+    }
+
+    /// The branch for a workspace name: `psyduck/<name>`, or the name itself
+    /// when it already has a prefix of its own (`fix/login`).
+    static func branchName(for name: String) -> String {
+        name.contains("/") ? name : "psyduck/\(name)"
+    }
     /// The worktree's directory. claude runs here, never in the repo itself.
     var path: String
     /// What the branch was cut from, e.g. `main` or `origin/main`.
