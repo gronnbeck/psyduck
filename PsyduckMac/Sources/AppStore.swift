@@ -30,14 +30,18 @@ final class AppStore: ObservableObject {
     @Published var branches: [UUID: BranchState] = [:]
     /// Workspaces with a header action (commit, push, PR…) in flight.
     @Published var acting: Set<UUID> = []
-    /// The file opened wide in the center pane, per workspace.
-    @Published var openDiff: [UUID: DiffFile] = [:]
-    /// The file whose diff shows inline in the changes panel, per workspace.
-    @Published var selectedFile: [UUID: DiffFile] = [:]
+    /// Diffs open as tabs beside the session: the files' paths, in the order
+    /// they were opened.
+    @Published private(set) var diffTabs: [UUID: [String]] = [:]
+    /// The tab in front, by path. Nil is the session.
+    @Published var activeDiff: [UUID: String] = [:]
 
     let settings: AppSettings
     private let stateURL: URL?
     private var turns: [UUID: Task<Void, Never>] = [:]
+    /// Streamed text not yet shown, and the workspaces about to show theirs.
+    private var pendingText: [UUID: String] = [:]
+    private var flushing: Set<UUID> = []
     /// When the running turn started, for the composer's clock.
     @Published private(set) var turnStarted: [UUID: Date] = [:]
     /// A follow-up typed while claude was busy, sent when the turn ends.
@@ -230,8 +234,8 @@ final class AppStore: ObservableObject {
         let id = workspace.id
         changes[id] = nil
         branches[id] = nil
-        openDiff[id] = nil
-        selectedFile[id] = nil
+        diffTabs[id] = nil
+        activeDiff[id] = nil
         queued[id] = nil
         streaming[id] = nil
         if selection == workspace.id { selection = workspaces.first?.id }
@@ -340,11 +344,21 @@ final class AppStore: ObservableObject {
         case .started(let sessionID):
             workspaces[i].claudeSessionID = sessionID
         case .textDelta(let text):
-            streaming[id, default: ""] += text
+            // Tokens arrive far faster than the window needs redrawing.
+            pendingText[id, default: ""] += text
+            if flushing.insert(id).inserted {
+                Task {
+                    try? await Task.sleep(for: .milliseconds(60))
+                    flushing.remove(id)
+                    if let text = pendingText.removeValue(forKey: id) { streaming[id, default: ""] += text }
+                }
+            }
         case .text(let text):
+            pendingText[id] = nil
             streaming[id] = ""
             workspaces[i].items.append(ChatItem(kind: .assistant, text: text))
         case .toolUse(let toolID, let name, let summary):
+            pendingText[id] = nil
             streaming[id] = ""
             workspaces[i].items.append(ChatItem(kind: .tool, text: name, detail: summary, toolID: toolID))
         case .toolResult(let toolID, let isError, let output):
@@ -376,6 +390,7 @@ final class AppStore: ObservableObject {
     }
 
     private func finishTurn(_ id: UUID, cancelled: Bool) {
+        if let text = pendingText.removeValue(forKey: id) { streaming[id, default: ""] += text }
         if cancelled { append(ChatItem(kind: .meta, text: "stopped"), to: id) }
         if let partial = streaming[id], !partial.isEmpty {
             append(ChatItem(kind: .assistant, text: partial), to: id)
@@ -403,12 +418,28 @@ final class AppStore: ObservableObject {
         guard let workspace = workspaces.first(where: { $0.id == id }) else { return }
         do {
             let files = try await settings.git.changedFiles(in: workspace.path, base: await diffBase(workspace))
-            changes[id] = files
-            if let open = openDiff[id], !files.contains(where: { $0.path == open.path }) {
-                openDiff[id] = nil
-            }
+            // Asked every few seconds; say so only when something changed,
+            // or the whole window redraws for nothing.
+            if changes[id] != files { changes[id] = files }
+            let paths = Set(files.map(\.path))
+            for gone in diffTabs[id] ?? [] where !paths.contains(gone) { closeDiff(gone, in: id) }
         } catch {
-            changes[id] = []
+            if changes[id]?.isEmpty != true { changes[id] = [] }
         }
+    }
+
+    /// Opens a changed file's diff in a tab, or brings its tab to the front.
+    func openDiff(_ path: String, in id: UUID) {
+        if diffTabs[id]?.contains(path) != true { diffTabs[id, default: []].append(path) }
+        activeDiff[id] = path
+    }
+
+    /// Closes a diff tab. If it was in front, its neighbour takes over, or
+    /// the session when it was the last one.
+    func closeDiff(_ path: String, in id: UUID) {
+        guard var tabs = diffTabs[id], let index = tabs.firstIndex(of: path) else { return }
+        tabs.remove(at: index)
+        diffTabs[id] = tabs.isEmpty ? nil : tabs
+        if activeDiff[id] == path { activeDiff[id] = tabs.isEmpty ? nil : tabs[min(index, tabs.count - 1)] }
     }
 }

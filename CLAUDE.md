@@ -43,6 +43,13 @@ so this project's Claude session is a bare `claude`, not kekkai.
   (haiku, `--tools ""`) only writes the commit message and PR title/body. New
   actions go in that enum. Fetch + `gh pr view` run every ~32s, local status
   every 4s.
+- **Diffs open as tabs** over the center pane, beside the session, one per
+  file clicked in the changes panel. The session view stays alive underneath.
+- **Long lists are lazy and rows are `Equatable`** (chat transcript, changed
+  files): `AppStore` publishes on every bit of streamed text, and a view that
+  rebuilds every row each time makes a long session lag. Streamed text is
+  shown in ~60ms batches, and `changes`/`branches` are only assigned when
+  they differ.
 - **Settings** is a page inside the main window (⌘, and the gear), not a
   separate Settings window.
 - **Design:** the Tinker design system, from the Claude Design canvas

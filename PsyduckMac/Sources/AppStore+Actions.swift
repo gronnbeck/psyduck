@@ -17,7 +17,7 @@ extension AppStore {
         let state = await settings.git.branchState(
             worktree: workspace.path, base: await diffBase(workspace), branch: workspace.branch,
             gh: ghPath, network: network, previousPR: branches[id]?.pr)
-        branches[id] = state
+        if branches[id] != state { branches[id] = state }
     }
 
     func perform(_ action: PrimaryAction, on id: UUID) {

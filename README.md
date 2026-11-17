@@ -20,8 +20,8 @@ Installed copies update themselves through Sparkle.
   Replies stream in, tool calls show as rows, and each turn resumes the same
   claude session (`--resume`).
 - **Changes panel:** the right-hand panel lists every file the workspace has
-  changed since its base commit (committed, uncommitted and untracked). Click
-  one to read its diff.
+  changed since its base branch (committed, uncommitted and untracked). Click
+  one to open its diff in a tab beside the session; Esc or the × closes it.
 - **Settings:** the claude path (auto-detected, overridable), permission
   mode, model, git path and where worktrees go.
 - **Rename:** right-click a workspace to rename it. Its branch is renamed
