@@ -46,12 +46,12 @@ final class ScreenRenderTests: XCTestCase {
         store.selectedFile[workspace.id] = file
         for dark in [true, false] {
             let suffix = dark ? "dark" : "light"
-            try await render("1-session-\(suffix)", ShellView(), dark: dark)
+            try await render("1-session-\(suffix)", RootLayout(mode: .constant(.code)) { ShellView() }, dark: dark)
         }
         store.openDiff[workspace.id] = file
-        try await render("2-diff-dark", ShellView(), dark: true)
+        try await render("2-diff-dark", RootLayout(mode: .constant(.code)) { ShellView() }, dark: true)
         store.openDiff[workspace.id] = nil
         store.showingSettings = true
-        try await render("3-settings-dark", ShellView(), dark: true)
+        try await render("3-settings-dark", RootLayout(mode: .constant(.code)) { ShellView() }, dark: true)
     }
 }
