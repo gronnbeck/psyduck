@@ -4,6 +4,7 @@ import SwiftUI
 
 struct SidebarView: View {
     @EnvironmentObject private var store: AppStore
+    @EnvironmentObject private var settings: AppSettings
 
     /// "New workspace" goes to the repo you're in, else the first one.
     private var targetRepo: Repo? {
@@ -40,8 +41,11 @@ struct SidebarView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
-                    ForEach(store.repos) { repo in
+                    ForEach(store.repos(on: nil)) { repo in
                         RepoSection(repo: repo)
+                    }
+                    ForEach(settings.hosts.filter(\.isUsable)) { host in
+                        HostSection(host: host)
                     }
                 }
                 .padding(.bottom, 16)
@@ -61,6 +65,70 @@ struct SidebarView: View {
             .padding(8)
         }
         .background(Tk.bg100)
+    }
+}
+
+/// A remote host: its name, whether it's connected, and its repos.
+private struct HostSection: View {
+    @EnvironmentObject private var store: AppStore
+    let host: RemoteHost
+    @State private var cloning = false
+
+    var body: some View {
+        let status = store.hostStatus[host.id] ?? .connecting
+        VStack(alignment: .leading, spacing: 0) {
+            Hairline().padding(.top, 8)
+            HStack(spacing: 8) {
+                Image(systemName: "server.rack").font(.system(size: 11)).foregroundStyle(Tk.inkMuted)
+                Text(host.displayName).font(.sans(13, .semibold)).foregroundStyle(Tk.ink).lineLimit(1)
+                Spacer(minLength: 4)
+                switch status {
+                case .connected:
+                    Button { cloning = true } label: { Image(systemName: "arrow.down.to.line") }
+                        .buttonStyle(.tkIcon(28))
+                        .help("Clone a repo on \(host.displayName)")
+                        .accessibilityLabel("Clone a repo on \(host.displayName)")
+                case .connecting:
+                    Text("Connecting…").font(.sans(12)).foregroundStyle(Tk.inkMuted)
+                        .frame(height: 28)
+                case .offline:
+                    Button { store.reconnect(host) } label: {
+                        HStack(spacing: 6) {
+                            Circle().fill(Tk.danger).frame(width: 8, height: 8)
+                            Text("Offline").font(.sans(12))
+                            Image(systemName: "arrow.clockwise").font(.system(size: 10, weight: .semibold))
+                        }
+                        .foregroundStyle(Tk.inkMuted)
+                        .frame(height: 28)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Try again now")
+                    .accessibilityLabel("\(host.displayName) is offline. Try again")
+                }
+            }
+            .padding(.leading, 16)
+            .padding(.trailing, 8)
+            .padding(.top, 12)
+
+            if case .offline(let reason) = status {
+                Text(reason.isEmpty ? "Can't reach it. psyduck keeps trying." : reason)
+                    .font(.mono(12)).foregroundStyle(Tk.danger)
+                    .lineLimit(3).textSelection(.enabled)
+                    .padding(.horizontal, 16).padding(.top, 2)
+            }
+
+            let repos = store.repos(on: host.id)
+            if repos.isEmpty, case .connected = status {
+                Text("No repos here yet. Clone one to start.")
+                    .font(.sans(12)).foregroundStyle(Tk.inkMuted)
+                    .padding(.horizontal, 16).padding(.top, 4)
+            }
+            ForEach(repos) { repo in
+                RepoSection(repo: repo)
+            }
+        }
+        .sheet(isPresented: $cloning) { CloneSheet(host: host, isPresented: $cloning) }
     }
 }
 
@@ -88,7 +156,9 @@ private struct RepoSection: View {
             .padding(.top, 12)
             .padding(.bottom, 4)
             .contextMenu {
-                Button("Reveal in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: repo.path) }
+                if store.host(of: repo) == nil {
+                    Button("Reveal in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: repo.path) }
+                }
                 Button("Remove from psyduck") { store.removeRepo(repo) }
             }
 
@@ -159,7 +229,9 @@ struct WorkspaceMenuItems: View {
     let workspace: Workspace
 
     var body: some View {
-        Button("Reveal worktree in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: workspace.path) }
+        if store.host(of: workspace) == nil {
+            Button("Reveal worktree in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: workspace.path) }
+        }
         Button("Copy worktree path") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(workspace.path, forType: .string)

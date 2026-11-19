@@ -75,6 +75,17 @@ struct SettingsView: View {
                         }
                     }
 
+                    section("Remote hosts") {
+                        Text("Other machines that run agents for you. Each one runs `psyduck serve`; this app reaches it by running the command below and talking over it, usually ssh. Its workspaces show in the sidebar under its name, and keep working when this Mac is asleep. A host uses its own claude and git logins and its own settings file, not the ones on this page.")
+                            .font(.sans(12)).foregroundStyle(Tk.inkMuted)
+                            .fixedSize(horizontal: false, vertical: true)
+                        ForEach(settings.hosts) { host in
+                            HostRow(host: host) { hostStatus(host) }
+                        }
+                        Button("Add a host") { settings.hosts.append(RemoteHost(name: "", command: "")) }
+                            .buttonStyle(.tkSecondary)
+                    }
+
                     section("About") {
                         HStack {
                             Text(updater.versionDescription).font(.mono(12)).foregroundStyle(Tk.inkMuted)
@@ -117,6 +128,22 @@ struct SettingsView: View {
         }
     }
 
+    @ViewBuilder
+    private func hostStatus(_ host: RemoteHost) -> some View {
+        switch store.hostStatus[host.id] {
+        case .connected(let machine):
+            Text(machine.isEmpty ? "✓ connected" : "✓ connected to \(machine)")
+                .font(.mono(12)).foregroundStyle(Tk.success)
+        case .connecting:
+            Text("connecting…").font(.mono(12)).foregroundStyle(Tk.inkMuted)
+        case .offline(let reason):
+            Text("✗ \(reason)").font(.mono(12)).foregroundStyle(Tk.danger)
+                .lineLimit(2).textSelection(.enabled)
+        case nil:
+            EmptyView()
+        }
+    }
+
     private func check() async {
         do {
             let path = try settings.resolvedClaude()
@@ -129,5 +156,48 @@ struct SettingsView: View {
             claudeOK = false
             claudeCheck = "✗ \(error.localizedDescription)"
         }
+    }
+}
+
+/// One remote host in settings. The command is only run once it's saved,
+/// never while it's half typed.
+private struct HostRow<Status: View>: View {
+    @EnvironmentObject private var settings: AppSettings
+    let host: RemoteHost
+    @ViewBuilder var status: Status
+    @State private var name = ""
+    @State private var command = ""
+
+    private var changed: Bool { name != host.name || command != host.command }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                TkTextField(text: $name, placeholder: "Name, like studio")
+                    .frame(width: 180)
+                    .onSubmit(save)
+                if !changed { status }
+                Spacer()
+                if changed {
+                    Button(host.command.isEmpty ? "Connect" : "Save", action: save)
+                        .buttonStyle(.tkPrimary)
+                        .disabled(command.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                Button("Remove") { settings.hosts.removeAll { $0.id == host.id } }
+                    .buttonStyle(.tkGhost)
+            }
+            TkTextField(text: $command, placeholder: "ssh studio docker exec -i psyduck psyduck attach")
+                .onSubmit(save)
+        }
+        .onAppear {
+            name = host.name
+            command = host.command
+        }
+    }
+
+    private func save() {
+        guard let index = settings.hosts.firstIndex(where: { $0.id == host.id }) else { return }
+        settings.hosts[index].name = name.trimmingCharacters(in: .whitespaces)
+        settings.hosts[index].command = command.trimmingCharacters(in: .whitespaces)
     }
 }

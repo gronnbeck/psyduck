@@ -44,7 +44,7 @@ public struct BranchState: Codable, Hashable, Sendable {
 
 /// The one thing the header button offers: the next step for this branch.
 /// More will join later, so it is an enum the view switches on, not a bool.
-public enum PrimaryAction: Equatable, Sendable {
+public enum PrimaryAction: Equatable, Codable, Sendable {
     case pull
     case commit
     case commitAndPush

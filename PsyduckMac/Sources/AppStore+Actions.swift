@@ -10,7 +10,7 @@ extension AppStore {
     }
 
     func refreshBranch(_ id: UUID, network: Bool) async {
-        guard let state = await engine.branchState(id, network: network),
+        guard let state = await engine(for: id).branchState(id, network: network),
               workspaces.contains(where: { $0.id == id }) else { return }
         if branches[id] != state { branches[id] = state }
     }
@@ -29,6 +29,7 @@ extension AppStore {
         }
 
         acting.insert(id)
+        let engine = engine(for: id)
         Task {
             await engine.perform(action, on: id)
             acting.remove(id)
@@ -47,6 +48,7 @@ extension AppStore {
     func discard(_ id: UUID) {
         guard workspaces.contains(where: { $0.id == id }), !acting.contains(id) else { return }
         acting.insert(id)
+        let engine = engine(for: id)
         Task {
             await engine.discard(id)
             acting.remove(id)

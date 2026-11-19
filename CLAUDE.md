@@ -28,6 +28,20 @@ so this project's Claude session is a bare `claude`, not kekkai.
   in the engine and in every client, never stored on their own. Token deltas
   are live-only (not stored). Changed files and branch state are asked for,
   not logged.
+- **Remote hosts.** The app talks to engines through `EngineClient`: its own
+  `WorkspaceEngine`, and a `RemoteEngine` per host in settings. A host is a
+  name and a shell command (`ssh … psyduck attach`) whose stdin and stdout
+  carry the wire protocol (`Wire`: one JSON object per line) to `psyduck
+  serve` on the other end. No port, no token: ssh and the socket's file mode
+  are the auth. Anything the app does to a workspace goes through
+  `AppStore.engine(for:)`, never straight to `engine`, or it silently acts on
+  the wrong machine. An unreachable host keeps its last known workspaces; it
+  is out of reach, not empty. The host command runs only when saved in
+  settings, never while typed. Changing `Wire` in a way old clients can't
+  read means bumping `Wire.version`. See `docs/REMOTE.md`.
+- **The host image** (`docker/`) takes its logins from environment variables
+  (`CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN`) at run time. Never bake a secret
+  into the image or take one as a build argument.
 - **Workspaces** are `git worktree`s at `~/psyduck/workspaces/<repo>/<name>`
   on branch `psyduck/<name>`, cut from `origin/<default branch>`, fetched
   first (`Git.defaultBaseRef`): always upstream's main or master, never the
@@ -104,6 +118,11 @@ so this project's Claude session is a bare `claude`, not kekkai.
 - `ClaudeStream` — stream-json line → `ClaudeEvent`; the turn's arguments.
 - `Shell` — runs CLIs with Homebrew and `~/.local/bin` on PATH (a
   Finder-launched app has neither).
+- `Remote/` — `EngineClient`, `Wire`, `RemoteServer` (host side),
+  `RemoteEngine` (client side, reconnects), `LineConnection` (unix sockets
+  and process pipes).
+
+`Sources/psyduck` — the host executable: `serve`, `attach`, `status`.
 
 `PsyduckMac/Sources` (the app):
 - `RootView` — the mode rail and which app is showing.
@@ -132,6 +151,9 @@ swift test
 # The same on Linux
 docker run --rm -v "$PWD":/w -w /w swift:6.2-noble swift test --scratch-path /tmp/b
 
+# The host image, and a host on this machine
+docker compose -f docker/compose.yml up -d --build
+
 # The Mac app
 cd PsyduckMac && xcodegen generate && xcodebuild -scheme Psyduck -destination 'platform=macOS' test
 
@@ -141,6 +163,7 @@ PSYDUCK_LIVE_CLAUDE=1 swift test --filter LiveClaudeTests
 # Render the window to PNGs (no Screen Recording needed), from a state.json
 TEST_RUNNER_PSYDUCK_RENDER_DIR=/tmp/screens TEST_RUNNER_PSYDUCK_RENDER_STATE=/path/state.json \
   xcodebuild test -scheme Psyduck -destination 'platform=macOS' -only-testing:PsyduckTests/ScreenRenderTests
+# add TEST_RUNNER_PSYDUCK_RENDER_HOSTS=1 for a connected remote host and an unreachable one
 
 # Render desk's screens with sample data
 TEST_RUNNER_PSYDUCK_DESK_RENDER_DIR=/tmp/desk xcodebuild test -scheme Psyduck \

@@ -217,8 +217,7 @@ struct ChatView: View {
     private func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        store.send(text, to: workspace.id)
-        draft = ""
+        if store.send(text, to: workspace.id) { draft = "" }
     }
 }
 
