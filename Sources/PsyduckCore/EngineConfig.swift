@@ -31,6 +31,21 @@ public struct EngineConfig: Codable, Equatable, Sendable {
         self.model = model
     }
 
+    /// Reads a config file: a JSON object with any of this struct's fields.
+    /// What's missing, or a file that's missing or broken, gets the default.
+    public static func load(from url: URL) -> EngineConfig {
+        var config = EngineConfig()
+        guard let data = try? Data(contentsOf: url),
+              let values = try? JSONDecoder().decode([String: String].self, from: data) else { return config }
+        if let value = values["claudePath"] { config.claudePath = value }
+        if let value = values["gitPath"] { config.gitPath = value }
+        if let value = values["workspacesRoot"] { config.workspacesRoot = value }
+        if let value = values["reposRoot"] { config.reposRoot = value }
+        if let value = values["permissionMode"] { config.permissionMode = value }
+        if let value = values["model"] { config.model = value }
+        return config
+    }
+
     public func resolvedClaude() throws -> String { try Shell.resolve("claude", configured: claudePath) }
 
     public func resolvedGit() -> String {

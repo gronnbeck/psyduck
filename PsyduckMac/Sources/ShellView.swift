@@ -267,12 +267,53 @@ private struct NoWorkspaceView: View {
     }
 }
 
+/// Asks for a repo's URL and clones it, on this Mac or on `host`.
+struct CloneSheet: View {
+    @EnvironmentObject private var store: AppStore
+    let host: RemoteHost?
+    @Binding var isPresented: Bool
+    @State private var url = ""
+    @State private var busy = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(host.map { "Clone a repo on \($0.displayName)" } ?? "Clone a repo").font(.display(22))
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Repository URL").font(.sans(12, .medium)).foregroundStyle(Tk.inkMuted)
+                TkTextField(text: $url, placeholder: "https://github.com/owner/repo.git")
+                    .onSubmit(clone)
+                Text(host == nil ? "Goes to \(store.settings.reposRoot)/<name>"
+                                 : "The host clones it with its own git login, into its repos folder.")
+                    .font(.mono(12)).foregroundStyle(Tk.inkFaint)
+            }
+            HStack(spacing: 8) {
+                Spacer()
+                Button("Cancel") { isPresented = false }.buttonStyle(.tkGhost)
+                Button(busy ? "Cloning…" : "Clone", action: clone)
+                    .buttonStyle(.tkPrimary)
+                    .disabled(busy || url.isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 480)
+        .background(Tk.bg200)
+    }
+
+    private func clone() {
+        guard !url.isEmpty, !busy else { return }
+        busy = true
+        Task {
+            await store.cloneRepo(url, on: host)
+            busy = false
+            isPresented = false
+        }
+    }
+}
+
 /// "Add repo" and "Clone".
 struct AddRepoButtons: View {
     @EnvironmentObject private var store: AppStore
     @State private var cloning = false
-    @State private var url = ""
-    @State private var busy = false
     var compact = false
 
     var body: some View {
@@ -293,38 +334,7 @@ struct AddRepoButtons: View {
                 }
             }
         }
-        .sheet(isPresented: $cloning) {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Clone a repo").font(.display(22))
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Repository URL").font(.sans(12, .medium)).foregroundStyle(Tk.inkMuted)
-                    TkTextField(text: $url, placeholder: "https://github.com/owner/repo.git")
-                        .onSubmit(clone)
-                    Text("Goes to \(store.settings.reposRoot)/<name>").font(.mono(12)).foregroundStyle(Tk.inkFaint)
-                }
-                HStack(spacing: 8) {
-                    Spacer()
-                    Button("Cancel") { cloning = false }.buttonStyle(.tkGhost)
-                    Button(busy ? "Cloning…" : "Clone", action: clone)
-                        .buttonStyle(.tkPrimary)
-                        .disabled(busy || url.isEmpty)
-                }
-            }
-            .padding(24)
-            .frame(width: 480)
-            .background(Tk.bg200)
-        }
-    }
-
-    private func clone() {
-        guard !url.isEmpty else { return }
-        busy = true
-        Task {
-            await store.cloneRepo(url)
-            busy = false
-            cloning = false
-            url = ""
-        }
+        .sheet(isPresented: $cloning) { CloneSheet(host: nil, isPresented: $cloning) }
     }
 
     private func pickFolder() {

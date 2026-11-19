@@ -1,12 +1,16 @@
+import Combine
 import Foundation
 import PsyduckCore
 import SwiftUI
 
 /// Everything the window shows. The work — repos, worktrees, claude turns,
-/// event logs — is the engine's; this mirrors its state for SwiftUI and
-/// keeps what only the window cares about (selection, the open diff tabs).
+/// event logs — is an engine's: the one in this process, and one per remote
+/// host. This mirrors their state for SwiftUI and keeps what only the window
+/// cares about (selection, the open diff tabs).
 @MainActor
 final class AppStore: ObservableObject {
+    /// Every engine's repos and workspaces: this Mac's first, then each
+    /// host's in the order they're listed in settings.
     @Published private(set) var repos: [Repo] = []
     @Published private(set) var workspaces: [Workspace] = []
     /// Each workspace's chat and session state, built from its events.
@@ -29,8 +33,11 @@ final class AppStore: ObservableObject {
     /// The tab in front, by path. Nil is the session.
     @Published var activeDiff: [UUID: String] = [:]
     @Published private(set) var creating: Set<UUID> = []
+    /// Whether each remote host is connected, by host id.
+    @Published private(set) var hostStatus: [UUID: RemoteEngine.Status] = [:]
 
     let settings: AppSettings
+    /// The engine in this process, for this Mac's repos.
     let engine: WorkspaceEngine
     /// One listener per workspace, feeding its events into `transcripts`.
     private var listeners: [UUID: Task<Void, Never>] = [:]
@@ -39,17 +46,138 @@ final class AppStore: ObservableObject {
     private var pendingDeltas: [UUID: [WorkspaceEvent]] = [:]
     private var flushing: Set<UUID> = []
 
-    init(settings: AppSettings, stateURL: URL? = EngineStorage.defaultStateURL()) {
+    /// A connected host: its engine, what it last said it has, and the task
+    /// following its connection.
+    private struct Remote {
+        var host: RemoteHost
+        var engine: RemoteEngine
+        var snapshot = EngineSnapshot()
+        var watcher: Task<Void, Never>?
+    }
+    private var remotes: [UUID: Remote] = [:]
+    private var local = EngineSnapshot()
+    /// Which host a repo is on. This Mac's repos aren't in it.
+    private var repoHosts: [UUID: UUID] = [:]
+    private let makeRemote: (RemoteHost) -> RemoteEngine
+    private var hostsObserver: AnyCancellable?
+    private var poller: Task<Void, Never>?
+
+    /// `makeRemote` is how a host is reached; tests hand in engines joined
+    /// to a server in the same process.
+    init(settings: AppSettings, stateURL: URL? = EngineStorage.defaultStateURL(),
+         makeRemote: @escaping (RemoteHost) -> RemoteEngine = { RemoteEngine(command: $0.command) }) {
         self.settings = settings
+        self.makeRemote = makeRemote
         let storage = EngineStorage(stateURL: stateURL)
         self.storage = storage
         let loaded = storage.load()
         engine = WorkspaceEngine(loaded: loaded, storage: storage) { await settings.config }
+        local = EngineSnapshot(repos: loaded.repos, workspaces: loaded.workspaces)
         repos = loaded.repos
         workspaces = loaded.workspaces
         transcripts = loaded.events.mapValues { Transcript(events: $0) }
         selection = workspaces.first?.id
         for workspace in workspaces { listen(to: workspace.id) }
+
+        connect(to: settings.hosts)
+        hostsObserver = settings.$hosts.dropFirst().sink { [weak self] hosts in
+            Task { @MainActor in
+                self?.connect(to: hosts)
+                await self?.sync()
+            }
+        }
+        // Hosts are also changed from other clients; ask now and then.
+        poller = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(10))
+                guard let self else { return }
+                if !self.remotes.isEmpty { await self.sync() }
+            }
+        }
+    }
+
+    deinit {
+        poller?.cancel()
+        for remote in remotes.values {
+            remote.watcher?.cancel()
+            let engine = remote.engine
+            Task { await engine.shutDown() }
+        }
+    }
+
+    // MARK: - Hosts
+
+    /// Makes the connections match the hosts in settings: new ones are
+    /// dialled, removed ones hung up, and a changed command redialled.
+    private func connect(to hosts: [RemoteHost]) {
+        let wanted = Dictionary(hosts.filter(\.isUsable).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        for (id, remote) in remotes where wanted[id]?.command != remote.host.command {
+            remote.watcher?.cancel()
+            let engine = remote.engine
+            Task { await engine.shutDown() }
+            remotes[id] = nil
+            hostStatus[id] = nil
+        }
+        for (id, host) in wanted {
+            if remotes[id] != nil {
+                remotes[id]?.host = host
+                continue
+            }
+            let engine = makeRemote(host)
+            var remote = Remote(host: host, engine: engine)
+            hostStatus[id] = .connecting
+            remote.watcher = Task { [weak self] in
+                await engine.start()
+                for await status in engine.statuses {
+                    guard let self else { return }
+                    self.hostStatus[id] = status
+                    if case .connected = status { await self.sync() }
+                }
+            }
+            remotes[id] = remote
+        }
+    }
+
+    /// Tries a host that's offline again, now.
+    func reconnect(_ host: RemoteHost) {
+        guard let engine = remotes[host.id]?.engine else { return }
+        Task { await engine.reconnect() }
+    }
+
+    func isConnected(_ hostID: UUID) -> Bool {
+        if case .connected = hostStatus[hostID] { return true }
+        return false
+    }
+
+    /// The host a repo is on, or nil for this Mac.
+    func host(of repo: Repo) -> RemoteHost? {
+        repoHosts[repo.id].flatMap { remotes[$0]?.host }
+    }
+
+    /// The host a workspace is on, or nil for this Mac.
+    func host(of workspace: Workspace) -> RemoteHost? {
+        repoHosts[workspace.repoID].flatMap { remotes[$0]?.host }
+    }
+
+    /// This Mac's repos (`nil`), or a host's.
+    func repos(on hostID: UUID?) -> [Repo] {
+        repos.filter { repoHosts[$0.id] == hostID }
+    }
+
+    private func engine(forRepo id: UUID) -> any EngineClient {
+        repoHosts[id].flatMap { remotes[$0]?.engine } ?? engine
+    }
+
+    func engine(for workspaceID: UUID) -> any EngineClient {
+        guard let workspace = workspaces.first(where: { $0.id == workspaceID }) else { return engine }
+        return engine(forRepo: workspace.repoID)
+    }
+
+    /// False when the workspace is on a host that can't be reached right now.
+    private func reachable(_ workspaceID: UUID) -> Bool {
+        guard let workspace = workspaces.first(where: { $0.id == workspaceID }),
+              let hostID = repoHosts[workspace.repoID] else { return true }
+        return isConnected(hostID)
     }
 
     // MARK: - Lookup
@@ -68,26 +196,55 @@ final class AppStore: ObservableObject {
 
     // MARK: - Engine state
 
-    /// Takes the engine's repos and workspaces as the truth.
+    /// Takes the engines' repos and workspaces as the truth. A host that
+    /// can't be asked keeps what it last said: its workspaces are out of
+    /// reach, not gone.
     private func sync() async {
-        let snapshot = await engine.snapshot()
+        local = await engine.snapshot()
+        for (id, remote) in remotes {
+            guard let snapshot = try? await remote.engine.fetchSnapshot() else { continue }
+            remotes[id]?.snapshot = snapshot
+        }
+
+        var allRepos = local.repos
+        var allWorkspaces = local.workspaces
+        var hosts: [UUID: UUID] = [:]
+        for host in settings.hosts {
+            guard let remote = remotes[host.id] else { continue }
+            // A repo's id is its engine's own; this Mac's win a clash.
+            let known = Set(allRepos.map(\.id))
+            let theirs = remote.snapshot.repos.filter { !known.contains($0.id) }
+            for repo in theirs { hosts[repo.id] = host.id }
+            allRepos += theirs
+            let theirIDs = Set(theirs.map(\.id))
+            allWorkspaces += remote.snapshot.workspaces.filter { theirIDs.contains($0.repoID) }
+        }
+        repoHosts = hosts
         // Say so only when something changed, or the whole window redraws.
-        if repos != snapshot.repos { repos = snapshot.repos }
-        if workspaces != snapshot.workspaces { workspaces = snapshot.workspaces }
+        if repos != allRepos { repos = allRepos }
+        if workspaces != allWorkspaces { workspaces = allWorkspaces }
+
         let alive = Set(workspaces.map(\.id))
-        for id in listeners.keys where !alive.contains(id) { forget(id) }
+        for id in Set(listeners.keys).union(transcripts.keys) where !alive.contains(id) { forget(id) }
+        for id in alive where reachable(id) { listen(to: id) }
         if selectedWorkspace == nil { selection = workspaces.first?.id }
     }
 
-    /// Follows a workspace's events from where its transcript left off.
+    /// Follows a workspace's events from where its transcript left off. A
+    /// host's stream ends when the connection drops; the next `sync()` after
+    /// it is back picks up from the last event seen.
     private func listen(to id: UUID) {
         guard listeners[id] == nil else { return }
         let since = transcripts[id]?.lastSeq ?? 0
-        listeners[id] = Task { [weak self, engine] in
+        let engine = engine(for: id)
+        listeners[id] = Task { [weak self] in
             for await event in await engine.events(for: id, since: since) {
                 guard let self else { return }
                 self.receive(event, for: id)
             }
+            guard !Task.isCancelled, let self else { return }
+            self.flush(id)
+            self.listeners[id] = nil
         }
     }
 
@@ -153,8 +310,10 @@ final class AppStore: ObservableObject {
         }
     }
 
-    /// Clones `url` under the repos root, then adds it.
-    func cloneRepo(_ url: String) async {
+    /// Clones `url` under the repos root, then adds it: on this Mac, or on
+    /// `host`.
+    func cloneRepo(_ url: String, on host: RemoteHost? = nil) async {
+        let engine: any EngineClient = host.flatMap { remotes[$0.id]?.engine } ?? engine
         do {
             try await engine.cloneRepo(url)
             await sync()
@@ -165,6 +324,7 @@ final class AppStore: ObservableObject {
 
     /// Forgets the repo. Its worktrees stay on disk.
     func removeRepo(_ repo: Repo) {
+        let engine = engine(forRepo: repo.id)
         Task {
             await engine.removeRepo(repo.id)
             await sync()
@@ -179,9 +339,8 @@ final class AppStore: ObservableObject {
         creating.insert(repo.id)
         defer { creating.remove(repo.id) }
         do {
-            let workspace = try await engine.newWorkspace(in: repo.id)
+            let workspace = try await engine(forRepo: repo.id).newWorkspace(in: repo.id)
             await sync()
-            listen(to: workspace.id)
             selection = workspace.id
             showingSettings = false
             await refreshChanges(workspace.id)
@@ -195,7 +354,7 @@ final class AppStore: ObservableObject {
     @discardableResult
     func rename(_ workspace: Workspace, to raw: String) async -> String? {
         do {
-            try await engine.rename(workspace.id, to: raw)
+            try await engine(for: workspace.id).rename(workspace.id, to: raw)
         } catch {
             return error.localizedDescription
         }
@@ -204,14 +363,14 @@ final class AppStore: ObservableObject {
         return nil
     }
 
-    /// Workspaces archived so far, from `archive.json`.
+    /// This Mac's workspaces archived so far, from `archive.json`.
     func loadArchive() -> [Workspace] { storage.loadArchive() }
 
     /// Soft-deletes a workspace: the worktree goes, uncommitted work is saved
     /// to a ref, and the record moves to `archive.json`. The branch is kept.
     func archive(_ workspace: Workspace) async {
         do {
-            try await engine.archive(workspace.id)
+            try await engine(for: workspace.id).archive(workspace.id)
             await sync()
         } catch {
             errorMessage = error.localizedDescription
@@ -222,11 +381,31 @@ final class AppStore: ObservableObject {
 
     /// Sends one message. claude's turn streams into the transcript; a
     /// message sent while a turn is running waits for it to end.
-    func send(_ text: String, to id: UUID) {
-        Task { await engine.send(text, to: id) }
+    /// Returns false, with nothing sent, when the workspace's host is
+    /// out of reach; the caller keeps the draft.
+    @discardableResult
+    func send(_ text: String, to id: UUID) -> Bool {
+        guard reachable(id) else {
+            errorMessage = "This workspace's host isn't connected, so the message wasn't sent."
+            return false
+        }
+        let engine = engine(for: id)
+        Task {
+            if let remote = engine as? RemoteEngine {
+                do {
+                    try await remote.deliver(text, to: id)
+                } catch {
+                    errorMessage = "The message didn't reach the host: \(error.localizedDescription)"
+                }
+            } else {
+                await engine.send(text, to: id)
+            }
+        }
+        return true
     }
 
     func stop(_ id: UUID) {
+        let engine = engine(for: id)
         Task { await engine.stop(id) }
     }
 
@@ -234,7 +413,14 @@ final class AppStore: ObservableObject {
 
     func refreshChanges(_ id: UUID) async {
         guard workspaces.contains(where: { $0.id == id }) else { return }
-        let files = await engine.changedFiles(id)
+        let files: [DiffFile]
+        if let remote = engine(for: id) as? RemoteEngine {
+            // A host that can't be asked keeps the list it last gave.
+            guard let fetched = try? await remote.fetchChangedFiles(id) else { return }
+            files = fetched
+        } else {
+            files = await engine.changedFiles(id)
+        }
         guard workspaces.contains(where: { $0.id == id }) else { return }
         // Asked every few seconds; say so only when something changed, or
         // the whole window redraws for nothing.
@@ -260,6 +446,6 @@ final class AppStore: ObservableObject {
 
     /// One file's unified diff against where the branch left its base.
     func diff(of file: DiffFile, in workspace: Workspace) async throws -> String {
-        try await engine.diff(of: file, in: workspace.id)
+        try await engine(for: workspace.id).diff(of: file, in: workspace.id)
     }
 }

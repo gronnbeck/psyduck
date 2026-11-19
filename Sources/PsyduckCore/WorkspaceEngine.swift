@@ -21,6 +21,11 @@ public enum EngineError: LocalizedError {
 public struct EngineSnapshot: Sendable {
     public var repos: [Repo]
     public var workspaces: [Workspace]
+
+    public init(repos: [Repo] = [], workspaces: [Workspace] = []) {
+        self.repos = repos
+        self.workspaces = workspaces
+    }
 }
 
 /// Everything psyduck does that isn't drawing: repos, worktrees, the claude

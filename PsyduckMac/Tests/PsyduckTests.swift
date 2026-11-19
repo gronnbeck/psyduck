@@ -147,4 +147,86 @@ final class AppStoreTests: XCTestCase {
         let reloaded = AppStore(settings: settings, stateURL: stateURL)
         XCTAssertEqual(reloaded.transcript(workspace.id).items, transcript.items)
     }
+
+    /// A remote host, as a second engine in this process behind the wire
+    /// protocol: its workspaces show beside this Mac's and a turn on it
+    /// reaches the store.
+    @MainActor
+    func testARemoteHostsWorkspacesShowBesideTheLocalOnes() async throws {
+        let claude = root.appendingPathComponent("claude").path
+        let script = [
+            "#!/bin/sh",
+            "cat > /dev/null",
+            #"printf '%s\n' '{"type":"system","subtype":"init","session_id":"s1"}'"#,
+            #"printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"on it"}]}}'"#,
+            "echo quack > duck.txt",
+            #"printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"duration_ms":900,"total_cost_usd":0.25,"session_id":"s1"}'"#,
+        ].joined(separator: "\n") + "\n"
+        try script.write(toFile: claude, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: claude)
+
+        // The host: its own engine, config and folders.
+        let hostConfig = EngineConfig(claudePath: claude, gitPath: "/usr/bin/git",
+                                      workspacesRoot: root.appendingPathComponent("host/workspaces").path,
+                                      reposRoot: root.appendingPathComponent("host/repos").path)
+        let server = RemoteServer(engine: WorkspaceEngine { hostConfig }, host: "studio")
+
+        let settings = AppSettings(defaults: UserDefaults(suiteName: "psyduck-tests-\(UUID().uuidString)")!)
+        settings.gitPath = "/usr/bin/git"
+        settings.workspacesRoot = root.appendingPathComponent("workspaces").path
+        let host = RemoteHost(name: "studio", command: "in-process")
+        settings.hosts = [host]
+        let store = AppStore(settings: settings, stateURL: nil) { _ in
+            RemoteEngine {
+                let (near, far) = try LineConnection.pair()
+                Task { await server.serve(far) }
+                return near
+            }
+        }
+        try await wait("the host connects") { store.isConnected(host.id) }
+        XCTAssertEqual(store.hostStatus[host.id], .connected("studio"))
+
+        // One repo here, one cloned on the host.
+        let repoPath = root.appendingPathComponent("repo").path
+        await store.addRepo(at: repoPath)
+        await store.cloneRepo(repoPath, on: host)
+        XCTAssertNil(store.errorMessage)
+        XCTAssertEqual(store.repos.count, 2)
+        let theirs = try XCTUnwrap(store.repos(on: host.id).first)
+        XCTAssertEqual(store.repos(on: nil).count, 1)
+        XCTAssertEqual(store.host(of: theirs), host)
+        XCTAssertTrue(theirs.path.contains("/host/repos/"), theirs.path)
+
+        await store.newWorkspace(in: theirs)
+        XCTAssertNil(store.errorMessage)
+        let workspace = try XCTUnwrap(store.selectedWorkspace)
+        XCTAssertEqual(workspace.repoID, theirs.id)
+        XCTAssertTrue(workspace.path.contains("/host/workspaces/"), workspace.path)
+
+        XCTAssertTrue(store.send("add a duck", to: workspace.id))
+        try await wait("the turn ends") {
+            let transcript = store.transcript(workspace.id)
+            return !transcript.running && transcript.items.contains { $0.kind == .meta }
+        }
+        XCTAssertEqual(store.transcript(workspace.id).items.map(\.kind), [.user, .assistant, .meta])
+        try await wait("the change shows") { store.changes[workspace.id]?.map(\.path) == ["duck.txt"] }
+        let file = try XCTUnwrap(store.changes[workspace.id]?.first)
+        let diff = try await store.diff(of: file, in: workspace)
+        XCTAssertTrue(diff.contains("+quack"))
+
+        // Taking the host out of settings takes its workspaces out of the window.
+        settings.hosts = []
+        try await wait("the host's repos go") { store.repos.count == 1 }
+        XCTAssertTrue(store.workspaces.isEmpty)
+        XCTAssertNil(store.hostStatus[host.id])
+    }
+
+    @MainActor
+    private func wait(_ what: String, timeout: Double = 20, until done: () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !done() {
+            if Date() > deadline { return XCTFail("timed out waiting until \(what)") }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
 }

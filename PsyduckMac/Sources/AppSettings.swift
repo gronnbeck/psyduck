@@ -1,6 +1,27 @@
 import Foundation
 import PsyduckCore
 
+/// A machine that runs agents for this app: `psyduck serve` on the other
+/// end of `command`, which is run through the shell and spoken to over its
+/// stdin and stdout. Usually ssh:
+///   ssh studio docker exec -i psyduck psyduck attach
+struct RemoteHost: Codable, Identifiable, Hashable {
+    var id = UUID()
+    var name: String
+    var command: String
+
+    /// What the sidebar calls it.
+    var displayName: String {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? "remote host" : trimmed
+    }
+
+    /// Nothing to connect with until there's a command.
+    var isUsable: Bool {
+        !command.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+}
+
 /// User preferences, kept in UserDefaults (per bundle id, so edge and local
 /// builds don't share them).
 @MainActor
@@ -17,6 +38,10 @@ final class AppSettings: ObservableObject {
     @Published var permissionMode: String { didSet { defaults.set(permissionMode, forKey: "permissionMode") } }
     /// Empty means claude's own default.
     @Published var model: String { didSet { defaults.set(model, forKey: "model") } }
+    /// Other machines that run agents for this app.
+    @Published var hosts: [RemoteHost] {
+        didSet { defaults.set(try? JSONEncoder().encode(hosts), forKey: "hosts") }
+    }
 
     static let permissionModes: [(id: String, label: String)] = [
         ("bypassPermissions", "Bypass: Claude runs any tool without asking"),
@@ -35,6 +60,7 @@ final class AppSettings: ObservableObject {
         reposRoot = defaults.string(forKey: "reposRoot") ?? Self.defaultReposRoot
         permissionMode = defaults.string(forKey: "permissionMode") ?? EngineConfig.defaultPermissionMode
         model = defaults.string(forKey: "model") ?? ""
+        hosts = defaults.data(forKey: "hosts").flatMap { try? JSONDecoder().decode([RemoteHost].self, from: $0) } ?? []
     }
 
     /// The settings as the engine takes them.
