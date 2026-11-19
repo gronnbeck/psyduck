@@ -38,7 +38,15 @@ so this project's Claude session is a bare `claude`, not kekkai.
   the wrong machine. An unreachable host keeps its last known workspaces; it
   is out of reach, not empty. The host command runs only when saved in
   settings, never while typed. Changing `Wire` in a way old clients can't
-  read means bumping `Wire.version`. See `docs/REMOTE.md`.
+  read means bumping `Wire.version`; a new call is added to
+  `Wire.capabilities` instead, so an app that updates itself still talks to
+  a host that hasn't been rebuilt. See `docs/REMOTE.md`.
+- **Copies of host workspaces** (`WorkspaceMirror`) are one way, host to Mac,
+  over the same connection (no rsync). Off, the open session, or all, in
+  settings; always available on demand. It writes only inside
+  `~/psyduck/mirrors/<host>/<repo>/<workspace>`, refuses paths that would
+  leave it (the host is not trusted with the Mac's disk), and removes only
+  files an earlier copy put there.
 - **The host image** (`docker/`) takes its logins from environment variables
   (`CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN`) at run time. Never bake a secret
   into the image or take one as a build argument.

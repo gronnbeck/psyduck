@@ -84,6 +84,20 @@ struct SettingsView: View {
                         }
                         Button("Add a host") { settings.hosts.append(RemoteHost(name: "", command: "")) }
                             .buttonStyle(.tkSecondary)
+                        row("Copy a host's files to this Mac",
+                            hint: "A one-way copy of a host workspace's files (everything git doesn't ignore), for opening in an editor or building here. The host's files replace the copy's; nothing is sent back. You can always copy on demand from the workspace's menu or the status bar.") {
+                            Picker("", selection: $settings.mirrorMode) {
+                                ForEach(AppSettings.mirrorModes, id: \.id) { mode in
+                                    Text(mode.label).tag(mode.id)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.radioGroup)
+                            .font(.sans(13))
+                            TkTextField(text: $settings.mirrorsRoot, placeholder: AppSettings.defaultMirrorsRoot)
+                            Text("Each copy is <here>/<host>/<repo>/<workspace>.")
+                                .font(.sans(12)).foregroundStyle(Tk.inkMuted)
+                        }
                     }
 
                     section("About") {

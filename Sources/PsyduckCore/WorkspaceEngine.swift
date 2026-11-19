@@ -416,6 +416,50 @@ public actor WorkspaceEngine {
         return try await git.diff(of: file, in: workspace.path, base: await diffBase(workspace, git: git))
     }
 
+    // MARK: - Files, for a client keeping a copy
+
+    /// The workspace's files as they are on disk right now: tracked, and
+    /// untracked but not ignored.
+    public func files(_ id: UUID) async throws -> [FileEntry] {
+        guard let workspace = workspace(id) else { throw EngineError.unknownWorkspace }
+        let paths = try await config().git.listFiles(in: workspace.path)
+        var seen = Set<String>()
+        var entries: [FileEntry] = []
+        for path in paths where seen.insert(path).inserted {
+            let full = (workspace.path as NSString).appendingPathComponent(path)
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: full) else { continue }
+            let type = attributes[.type] as? FileAttributeType
+            let modified = (attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+            let mode = (attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0o644
+            if type == .typeSymbolicLink {
+                guard let target = try? FileManager.default.destinationOfSymbolicLink(atPath: full) else { continue }
+                entries.append(FileEntry(path: path, size: 0, modified: modified, mode: mode, link: target))
+            } else if type == .typeRegular {
+                let size = (attributes[.size] as? NSNumber)?.intValue ?? 0
+                entries.append(FileEntry(path: path, size: size, modified: modified, mode: mode))
+            }
+        }
+        return entries
+    }
+
+    /// The bytes of some of the workspace's files. Paths that would leave
+    /// the worktree are refused.
+    public func readFiles(_ paths: [String], in id: UUID) throws -> [FileContent] {
+        guard let workspace = workspace(id) else { throw EngineError.unknownWorkspace }
+        let root = URL(fileURLWithPath: workspace.path).resolvingSymlinksInPath().path
+        return try paths.map { path in
+            guard WorkspaceMirror.isSafe(path) else { throw EngineError.worktree("\(path) isn't a file in this workspace") }
+            let url = URL(fileURLWithPath: workspace.path).appendingPathComponent(path)
+            let parent = url.deletingLastPathComponent().resolvingSymlinksInPath().path
+            guard parent == root || parent.hasPrefix(root + "/") else {
+                throw EngineError.worktree("\(path) isn't a file in this workspace")
+            }
+            // A link's own target is in the listing; its contents aren't sent.
+            let isLink = (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil
+            return FileContent(path: path, data: isLink ? nil : try? Data(contentsOf: url))
+        }
+    }
+
     // MARK: - Branch actions
 
     private var ghPath: String? { try? Shell.resolve("gh", configured: "") }

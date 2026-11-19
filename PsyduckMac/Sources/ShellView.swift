@@ -228,6 +228,9 @@ private struct StatusBar: View {
                     if state.behind > 0 { Text("↓\(state.behind)").foregroundStyle(Tk.warning) }
                 }
                 Spacer()
+                if let host = store.host(of: workspace) {
+                    MirrorStatus(workspace: workspace, host: host)
+                }
                 if let cost = workspace.totalCost {
                     Text(String(format: "session $%.3f", cost))
                 }
@@ -242,6 +245,54 @@ private struct StatusBar: View {
         .padding(.horizontal, 12)
         .frame(height: 24)
         .background(Tk.bg100)
+    }
+}
+
+/// In the status bar of a host's workspace: which host it is on, and where
+/// its copy on this Mac stands. Click to copy now.
+private struct MirrorStatus: View {
+    @EnvironmentObject private var store: AppStore
+    let workspace: Workspace
+    let host: RemoteHost
+
+    var body: some View {
+        Button { Task { await store.mirror(workspace.id) } } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "server.rack").font(.system(size: 10))
+                Text(label)
+            }
+            .foregroundStyle(failed ? Tk.danger : Tk.inkMuted)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(store.mirrors[workspace.id] == .syncing)
+        .help(help)
+    }
+
+    private var failed: Bool {
+        if case .failed = store.mirrors[workspace.id] { return true }
+        return false
+    }
+
+    private var label: String {
+        switch store.mirrors[workspace.id] {
+        case .syncing: return "\(host.displayName) · copying files…"
+        case .synced(let date, _): return "\(host.displayName) · copied \(date.formatted(date: .omitted, time: .shortened))"
+        case .failed: return "\(host.displayName) · copy failed"
+        case nil: return "\(host.displayName) · copy files here"
+        }
+    }
+
+    private var help: String {
+        let place = store.mirrorDirectory(for: workspace)?.path ?? ""
+        switch store.mirrors[workspace.id] {
+        case .failed(let reason): return "\(reason). Click to try again."
+        case .synced(_, let result):
+            var parts = ["\(result.copied) copied, \(result.removed) removed, into \(place)."]
+            if !result.skipped.isEmpty { parts.append("Left out: " + result.skipped.prefix(5).joined(separator: "; ")) }
+            return parts.joined(separator: " ") + " Click to copy again."
+        default: return "Copy this workspace's files to \(place)"
+        }
     }
 }
 

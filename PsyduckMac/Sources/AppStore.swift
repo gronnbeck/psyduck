@@ -15,7 +15,9 @@ final class AppStore: ObservableObject {
     @Published private(set) var workspaces: [Workspace] = []
     /// Each workspace's chat and session state, built from its events.
     @Published private(set) var transcripts: [UUID: Transcript] = [:]
-    @Published var selection: UUID?
+    @Published var selection: UUID? {
+        didSet { if selection != oldValue { selectionChanged() } }
+    }
     @Published var errorMessage: String?
     /// Settings is a page in the main window, over the chat and changes panes.
     @Published var showingSettings = false
@@ -33,6 +35,10 @@ final class AppStore: ObservableObject {
     /// The tab in front, by path. Nil is the session.
     @Published var activeDiff: [UUID: String] = [:]
     @Published private(set) var creating: Set<UUID> = []
+    /// Where each host workspace's copy on this Mac stands.
+    @Published private(set) var mirrors: [UUID: MirrorState] = [:]
+    /// Workspaces whose copy went stale while it was being made.
+    private var mirrorAgain: Set<UUID> = []
     /// Whether each remote host is connected, by host id.
     @Published private(set) var hostStatus: [UUID: RemoteEngine.Status] = [:]
 
@@ -267,12 +273,16 @@ final class AppStore: ObservableObject {
         switch event.kind {
         case .toolResult:
             // Edits land while claude works; keep the panel close behind.
-            Task { await refreshChanges(id) }
+            Task {
+                await refreshChanges(id)
+                await mirrorIfWanted(id)
+            }
         case .turnResult, .turnEnded:
             // The session id and cost live on the workspace.
             Task {
                 await sync()
                 await refreshChanges(id)
+                await mirrorIfWanted(id)
             }
         default:
             break
@@ -295,6 +305,74 @@ final class AppStore: ObservableObject {
         branches[id] = nil
         diffTabs[id] = nil
         activeDiff[id] = nil
+        mirrors[id] = nil
+    }
+
+    // MARK: - Copies of host workspaces
+
+    /// A host workspace's copy on this Mac: being made, made, or failed.
+    enum MirrorState: Equatable {
+        case syncing
+        case synced(Date, MirrorResult)
+        case failed(String)
+    }
+
+    /// Where a host workspace is copied to on this Mac, or nil for a
+    /// workspace that is already here.
+    func mirrorDirectory(for workspace: Workspace) -> URL? {
+        guard let host = host(of: workspace), let repo = repo(for: workspace) else { return nil }
+        func safe(_ name: String) -> String {
+            let cleaned = name.replacingOccurrences(of: "/", with: "-").trimmingCharacters(in: .whitespaces)
+            return cleaned.isEmpty || cleaned.hasPrefix(".") ? "host" : cleaned
+        }
+        // The folder keeps the name the workspace was made with, as the
+        // worktree on the host does, so a rename doesn't start a second copy.
+        let folder = (workspace.path as NSString).lastPathComponent
+        return URL(fileURLWithPath: (settings.mirrorsRoot as NSString).expandingTildeInPath)
+            .appendingPathComponent(safe(host.displayName))
+            .appendingPathComponent(safe(repo.name))
+            .appendingPathComponent(safe(folder))
+    }
+
+    /// Copies a host workspace's files to this Mac now. One way: the host's
+    /// files replace the copy's. Asked again while one runs, it runs once more
+    /// after.
+    func mirror(_ id: UUID) async {
+        guard let workspace = workspaces.first(where: { $0.id == id }),
+              let directory = mirrorDirectory(for: workspace),
+              let remote = engine(for: id) as? RemoteEngine else { return }
+        if mirrors[id] == .syncing {
+            mirrorAgain.insert(id)
+            return
+        }
+        mirrors[id] = .syncing
+        repeat {
+            mirrorAgain.remove(id)
+            do {
+                let result = try await remote.mirror(id, into: directory)
+                mirrors[id] = .synced(Date(), result)
+            } catch {
+                mirrors[id] = .failed(error.localizedDescription)
+                mirrorAgain.remove(id)
+            }
+        } while mirrorAgain.contains(id)
+    }
+
+    /// The automatic copy, when settings ask for one for this workspace.
+    private func mirrorIfWanted(_ id: UUID) async {
+        switch settings.mirrorMode {
+        case "all": break
+        case "open": guard selection == id else { return }
+        default: return
+        }
+        guard reachable(id) else { return }
+        await mirror(id)
+    }
+
+    /// Opening a session brings its copy up to date, in the "open" mode.
+    func selectionChanged() {
+        guard settings.mirrorMode == "open" || settings.mirrorMode == "all", let id = selection else { return }
+        Task { await mirrorIfWanted(id) }
     }
 
     // MARK: - Repos

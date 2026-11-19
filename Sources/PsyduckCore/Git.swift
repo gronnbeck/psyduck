@@ -195,6 +195,15 @@ public struct Git: Sendable {
         return baseCommit
     }
 
+    /// Every file in the worktree that isn't ignored: tracked ones and new
+    /// ones. Paths are relative; a tracked file that was deleted is still
+    /// listed.
+    public func listFiles(in worktree: String) async throws -> [String] {
+        let result = try await run(["ls-files", "-z", "--cached", "--others", "--exclude-standard"], in: worktree)
+        guard result.ok else { throw GitError.failed(result.failureLine) }
+        return result.stdout.split(separator: "\0").map(String.init)
+    }
+
     /// Everything that differs from `base`: commits on the branch, staged and
     /// unstaged changes, and untracked files.
     public func changedFiles(in worktree: String, base: String) async throws -> [DiffFile] {

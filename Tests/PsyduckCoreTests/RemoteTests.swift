@@ -75,6 +75,71 @@ final class RemoteTests: XCTestCase {
         await remote.shutDown()
     }
 
+    /// The workspace's files land in a folder here, only changes travel the
+    /// second time, and what the host deleted is deleted here too.
+    func testAWorkspaceIsCopiedToALocalFolder() async throws {
+        let server = RemoteServer(engine: fixture.engine())
+        let remote = client(of: server)
+        await connected(remote)
+        let repo = try await remote.addRepo(at: fixture.repo)
+        let workspace = try await remote.newWorkspace(in: repo.id)
+        let there = workspace.path
+        try FileManager.default.createDirectory(atPath: there + "/src/deep", withIntermediateDirectories: true)
+        try "print(1)\n".write(toFile: there + "/src/deep/main.py", atomically: true, encoding: .utf8)
+        try "#!/bin/sh\n".write(toFile: there + "/run.sh", atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: there + "/run.sh")
+        try FileManager.default.createSymbolicLink(atPath: there + "/link", withDestinationPath: "README.md")
+        try "*.log\n".write(toFile: there + "/.gitignore", atomically: true, encoding: .utf8)
+        try "noise\n".write(toFile: there + "/build.log", atomically: true, encoding: .utf8)
+
+        let here = fixture.root.appendingPathComponent("copy")
+        let first = try await remote.mirror(workspace.id, into: here)
+        XCTAssertEqual(first.copied, 5, "README, .gitignore, run.sh, main.py and the link")
+        XCTAssertEqual(try String(contentsOf: here.appendingPathComponent("src/deep/main.py"), encoding: .utf8), "print(1)\n")
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: here.appendingPathComponent("run.sh").path))
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: here.appendingPathComponent("link").path), "README.md")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: here.appendingPathComponent("build.log").path), "ignored files stay on the host")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: here.appendingPathComponent(".git").path))
+
+        let again = try await remote.mirror(workspace.id, into: here)
+        XCTAssertEqual(again, MirrorResult(), "nothing changed, nothing travels")
+
+        // Something built in the copy is left alone; a file the host drops goes.
+        try "local\n".write(to: here.appendingPathComponent("built.o"), atomically: true, encoding: .utf8)
+        try FileManager.default.removeItem(atPath: there + "/src/deep/main.py")
+        try "print(2)\n".write(toFile: there + "/src/other.py", atomically: true, encoding: .utf8)
+        let third = try await remote.mirror(workspace.id, into: here)
+        XCTAssertEqual(third.copied, 1)
+        XCTAssertEqual(third.removed, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: here.appendingPathComponent("src/deep").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: here.appendingPathComponent("built.o").path))
+        await remote.shutDown()
+    }
+
+    func testFilesOutsideTheWorkspaceAreRefusedBothWays() async throws {
+        let engine = fixture.engine()
+        let repo = try await engine.addRepo(at: fixture.repo)
+        let workspace = try await engine.newWorkspace(in: repo.id)
+        for path in ["../../repo/README.md", "/etc/passwd", "a/../../x", ""] {
+            do {
+                _ = try await engine.readFiles([path], in: workspace.id)
+                XCTFail("\(path) should be refused")
+            } catch {}
+        }
+
+        // A host that lies about paths can't write outside the copy.
+        let here = fixture.root.appendingPathComponent("copy")
+        let outside = fixture.root.appendingPathComponent("outside.txt")
+        let entries = [FileEntry(path: "../outside.txt", size: 1, modified: 0, mode: 0o644),
+                       FileEntry(path: "escape", size: 0, modified: 0, mode: 0o777, link: fixture.root.path),
+                       FileEntry(path: "escape/outside.txt", size: 1, modified: 0, mode: 0o644)]
+        let result = try await WorkspaceMirror.sync(into: here, entries: entries) { paths in
+            paths.map { FileContent(path: $0, data: Data("x".utf8)) }
+        }
+        XCTAssertEqual(result.skipped.count, 2)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.path))
+    }
+
     func testTheHostsRefusalsArriveAsItWroteThem() async throws {
         let server = RemoteServer(engine: fixture.engine())
         let remote = client(of: server)

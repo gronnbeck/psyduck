@@ -43,6 +43,19 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(try? JSONEncoder().encode(hosts), forKey: "hosts") }
     }
 
+    /// When a host's workspace is copied to this Mac: `off` (only when asked),
+    /// `open` (the session you have open, as it changes) or `all`.
+    @Published var mirrorMode: String { didSet { defaults.set(mirrorMode, forKey: "mirrorMode") } }
+    /// Where the copies go: `<root>/<host>/<repo>/<workspace>`.
+    @Published var mirrorsRoot: String { didSet { defaults.set(mirrorsRoot, forKey: "mirrorsRoot") } }
+
+    static let mirrorModes: [(id: String, label: String)] = [
+        ("off", "Only when I ask"),
+        ("open", "The session I have open, whenever Claude changes something"),
+        ("all", "Every session on a host, whenever Claude changes something"),
+    ]
+    static let defaultMirrorsRoot = "~/psyduck/mirrors"
+
     static let permissionModes: [(id: String, label: String)] = [
         ("bypassPermissions", "Bypass: Claude runs any tool without asking"),
         ("acceptEdits", "Accept edits: other tools only if your Claude settings allow them"),
@@ -60,6 +73,8 @@ final class AppSettings: ObservableObject {
         reposRoot = defaults.string(forKey: "reposRoot") ?? Self.defaultReposRoot
         permissionMode = defaults.string(forKey: "permissionMode") ?? EngineConfig.defaultPermissionMode
         model = defaults.string(forKey: "model") ?? ""
+        mirrorMode = defaults.string(forKey: "mirrorMode") ?? "off"
+        mirrorsRoot = defaults.string(forKey: "mirrorsRoot") ?? Self.defaultMirrorsRoot
         hosts = defaults.data(forKey: "hosts").flatMap { try? JSONDecoder().decode([RemoteHost].self, from: $0) } ?? []
     }
 

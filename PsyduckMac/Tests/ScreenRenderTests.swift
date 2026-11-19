@@ -55,7 +55,11 @@ final class ScreenRenderTests: XCTestCase {
                 await store.newWorkspace(in: theirs)
                 await store.newWorkspace(in: theirs)
             }
-            store.selection = store.workspaces.first?.id
+            settings.mirrorsRoot = scratch.appendingPathComponent("mirrors").path
+            if let remote = store.workspaces.first(where: { store.host(of: $0) != nil }) {
+                await store.mirror(remote.id)
+                store.selection = remote.id
+            }
         }
         let updater = UpdaterModel()
         let workspace = try XCTUnwrap(store.selectedWorkspace)

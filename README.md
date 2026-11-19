@@ -35,7 +35,8 @@ Agents can run on another machine and keep going when your Mac is asleep.
 The other machine runs `psyduck serve` (there is a container image in
 `docker/`); in the app, Settings → Remote hosts takes a name and the command
 that reaches it, usually `ssh <host> docker exec -i psyduck psyduck attach`.
-The host's workspaces show in the sidebar under its name. It is new and
+The host's workspaces show in the sidebar under its name, and their files can
+be copied to your Mac as they change. It is new and
 experimental: see [docs/REMOTE.md](docs/REMOTE.md).
 
 ## Desk

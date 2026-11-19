@@ -214,6 +214,29 @@ final class AppStoreTests: XCTestCase {
         let diff = try await store.diff(of: file, in: workspace)
         XCTAssertTrue(diff.contains("+quack"))
 
+        // The workspace's files can be copied here: on demand, then on their
+        // own once settings ask for it.
+        settings.mirrorsRoot = root.appendingPathComponent("mirrors").path
+        let copy = try XCTUnwrap(store.mirrorDirectory(for: workspace))
+        XCTAssertTrue(copy.path.hasSuffix("/mirrors/studio/repo/\(workspace.name)"), copy.path)
+        await store.mirror(workspace.id)
+        guard case .synced(_, let copied) = store.mirrors[workspace.id] else {
+            return XCTFail("not copied: \(String(describing: store.mirrors[workspace.id]))")
+        }
+        XCTAssertEqual(copied.copied, 2, "a.txt and duck.txt")
+        XCTAssertEqual(try String(contentsOf: copy.appendingPathComponent("duck.txt"), encoding: .utf8), "quack\n")
+
+        settings.mirrorMode = "open"
+        try "more\n".write(toFile: workspace.path + "/more.txt", atomically: true, encoding: .utf8)
+        XCTAssertTrue(store.send("again", to: workspace.id))
+        try await wait("the new file is copied") {
+            FileManager.default.fileExists(atPath: copy.appendingPathComponent("more.txt").path)
+        }
+        let localRepo = try XCTUnwrap(store.repos(on: nil).first)
+        await store.newWorkspace(in: localRepo)
+        XCTAssertNil(store.mirrorDirectory(for: try XCTUnwrap(store.selectedWorkspace)), "a local workspace has no copy")
+        await store.archive(try XCTUnwrap(store.selectedWorkspace))
+
         // Taking the host out of settings takes its workspaces out of the window.
         settings.hosts = []
         try await wait("the host's repos go") { store.repos.count == 1 }

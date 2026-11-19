@@ -231,8 +231,14 @@ struct WorkspaceMenuItems: View {
     var body: some View {
         if store.host(of: workspace) == nil {
             Button("Reveal worktree in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: workspace.path) }
+        } else if let copy = store.mirrorDirectory(for: workspace) {
+            Button("Copy files to this Mac") { Task { await store.mirror(workspace.id) } }
+                .disabled(store.mirrors[workspace.id] == .syncing)
+            if FileManager.default.fileExists(atPath: copy.path) {
+                Button("Reveal the copy in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: copy.path) }
+            }
         }
-        Button("Copy worktree path") {
+        Button(store.host(of: workspace) == nil ? "Copy worktree path" : "Copy worktree path on the host") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(workspace.path, forType: .string)
         }
