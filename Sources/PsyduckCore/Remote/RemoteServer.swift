@@ -28,7 +28,11 @@ public struct RemoteServer: Sendable {
         await withTaskGroup(of: Void.self) { group in
             for await line in connection.lines {
                 guard let request = try? Wire.decoder().decode(Wire.Request.self, from: line) else {
-                    Self.send(Wire.Message(error: "that isn't a request psyduck understands"), on: connection)
+                    // A call from a newer client still gets its answer, so
+                    // the client isn't left waiting.
+                    let id = (try? Wire.decoder().decode(RequestID.self, from: line))?.id
+                    Self.send(Wire.Message(id: id, error: "this host's psyduck doesn't know that request. Update the host."),
+                              on: connection)
                     continue
                 }
                 group.addTask {
@@ -68,7 +72,7 @@ public struct RemoteServer: Sendable {
 
         switch request.method {
         case .hello:
-            return Wire.Result(version: Wire.version, host: host)
+            return Wire.Result(version: Wire.version, host: host, capabilities: Wire.capabilities)
 
         case .snapshot:
             let snapshot = await engine.snapshot()
@@ -128,7 +132,16 @@ public struct RemoteServer: Sendable {
         case .discard:
             await engine.discard(try workspace())
             return Wire.Result()
+
+        case .files:
+            return Wire.Result(entries: try await engine.files(try workspace()))
+        case .readFiles:
+            return Wire.Result(contents: try await engine.readFiles(params.paths ?? [], in: try workspace()))
         }
+    }
+
+    private struct RequestID: Decodable {
+        var id: Int
     }
 
     /// One connection's event subscriptions, by the client's number.

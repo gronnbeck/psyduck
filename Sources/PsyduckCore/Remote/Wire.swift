@@ -14,6 +14,8 @@ import Foundation
 public enum Wire {
     /// Bumped when a client and server of different versions can't talk.
     public static let version = 1
+    /// What `hello` lists under `capabilities`.
+    public static let capabilities = ["files"]
 
     public enum Method: String, Codable, Sendable {
         case hello, snapshot, events, unsubscribe
@@ -21,6 +23,7 @@ public enum Wire {
         case newWorkspace, rename, archive
         case send, stop
         case changedFiles, diff, branchState, perform, discard
+        case files, readFiles
     }
 
     /// Every call's arguments in one bag; each method reads what it needs.
@@ -37,10 +40,12 @@ public enum Wire {
         public var network: Bool?
         public var file: DiffFile?
         public var action: PrimaryAction?
+        public var paths: [String]?
 
         public init(repo: UUID? = nil, workspace: UUID? = nil, path: String? = nil, url: String? = nil,
                     text: String? = nil, name: String? = nil, since: Int? = nil, sub: Int? = nil,
-                    network: Bool? = nil, file: DiffFile? = nil, action: PrimaryAction? = nil) {
+                    network: Bool? = nil, file: DiffFile? = nil, action: PrimaryAction? = nil,
+                    paths: [String]? = nil) {
             self.repo = repo
             self.workspace = workspace
             self.path = path
@@ -52,6 +57,7 @@ public enum Wire {
             self.network = network
             self.file = file
             self.action = action
+            self.paths = paths
         }
     }
 
@@ -79,10 +85,16 @@ public enum Wire {
         /// `hello`: the wire version and the machine's name.
         public var version: Int?
         public var host: String?
+        /// `hello`: what this server can do beyond version 1's calls, so a
+        /// newer app can tell an older host apart without refusing it.
+        public var capabilities: [String]?
+        public var entries: [FileEntry]?
+        public var contents: [FileContent]?
 
         public init(repos: [Repo]? = nil, workspaces: [Workspace]? = nil, repo: Repo? = nil,
                     workspace: Workspace? = nil, files: [DiffFile]? = nil, diff: String? = nil,
-                    branch: BranchState? = nil, version: Int? = nil, host: String? = nil) {
+                    branch: BranchState? = nil, version: Int? = nil, host: String? = nil,
+                    capabilities: [String]? = nil, entries: [FileEntry]? = nil, contents: [FileContent]? = nil) {
             self.repos = repos
             self.workspaces = workspaces
             self.repo = repo
@@ -92,6 +104,9 @@ public enum Wire {
             self.branch = branch
             self.version = version
             self.host = host
+            self.capabilities = capabilities
+            self.entries = entries
+            self.contents = contents
         }
     }
 

@@ -55,6 +55,26 @@ sessions, and `config.json` (model, permission mode). The image has git, gh
 and claude and nothing else, so a project that needs a toolchain needs an
 image built on top of it.
 
+### A copy of the files on your Mac
+
+A host workspace's files can be copied to this Mac, to open in an editor or
+build here. Settings → Remote hosts → "Copy a host's files to this Mac":
+
+- **Only when I ask**: the workspace's "…" menu, or the host's name in the
+  status bar.
+- **The session I have open**: when you open it, and each time claude
+  changes something in it.
+- **Every session on a host**.
+
+The copy is at `~/psyduck/mirrors/<host>/<repo>/<workspace>`. It is one way:
+the host's files replace the copy's, and nothing you change in the copy goes
+back. It has everything git doesn't ignore and no `.git`. Only what changed
+travels. Files the host deletes are deleted from the copy; files you made
+there yourself (build products) are left alone. Files over 100 MB are left
+out. It goes over the same connection as everything else, so it needs no
+rsync and no second ssh setup. A host built before this was added says so;
+rebuild its image.
+
 Without Docker, the same thing by hand: `swift build -c release --product
 psyduck`, run `psyduck serve` under the account that has the logins, and use
 `ssh <host> psyduck attach` as the command.
@@ -149,6 +169,7 @@ One JSON object per line, both ways (`Wire` in `PsyduckCore`):
 | `events {workspace, since, sub}` | Replay after `since`, then live events, tagged with the client's `sub`. `unsubscribe {sub}` ends it |
 | `changedFiles`, `diff {file}`, `branchState {network}` | What the changes panel asks for |
 | `perform {action}`, `discard` | The primary action, and discard |
+| `files`, `readFiles {paths}` | The workspace's files (path, size, time, mode) and their bytes, for a client keeping a copy. `hello` lists `files` under `capabilities` |
 
 ## Transport and auth
 

@@ -39,6 +39,8 @@ public actor RemoteEngine: EngineClient {
     private var subscriptions: [Int: AsyncStream<WorkspaceEvent>.Continuation] = [:]
 
     public private(set) var status: Status = .connecting
+    /// What the connected host said it can do (`Wire.capabilities`).
+    public private(set) var capabilities: Set<String> = []
     /// Every change of `status`, for whoever shows it.
     public nonisolated let statuses: AsyncStream<Status>
     private let statusContinuation: AsyncStream<Status>.Continuation
@@ -100,6 +102,7 @@ public actor RemoteEngine: EngineClient {
                 do {
                     let hello = try await call(.hello)
                     guard hello.version == Wire.version else { throw RemoteError.version(hello.version ?? 0) }
+                    capabilities = Set(hello.capabilities ?? [])
                     setStatus(.connected(hello.host ?? ""))
                     wait = 1
                 } catch RemoteError.offline {
@@ -259,6 +262,18 @@ public actor RemoteEngine: EngineClient {
 
     public func archive(_ id: UUID) async throws {
         try await call(.archive, Wire.Params(workspace: id))
+    }
+
+    /// Copies the workspace's files into `directory` on this machine,
+    /// fetching only what changed since the last time.
+    public func mirror(_ id: UUID, into directory: URL) async throws -> MirrorResult {
+        guard capabilities.contains("files") else {
+            throw RemoteError.server("this host's psyduck is too old to copy files. Update the host.")
+        }
+        let entries = try await call(.files, Wire.Params(workspace: id)).entries ?? []
+        return try await WorkspaceMirror.sync(into: directory, entries: entries) { paths in
+            try await self.call(.readFiles, Wire.Params(workspace: id, paths: paths)).contents ?? []
+        }
     }
 
     public func send(_ text: String, to id: UUID) async {
