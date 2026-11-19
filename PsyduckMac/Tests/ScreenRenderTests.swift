@@ -29,7 +29,34 @@ final class ScreenRenderTests: XCTestCase {
         if FileManager.default.fileExists(atPath: events.path) {
             try FileManager.default.copyItem(at: events, to: scratch.appendingPathComponent("events"))
         }
-        let store = AppStore(settings: settings, stateURL: stateURL)
+        // With TEST_RUNNER_PSYDUCK_RENDER_HOSTS=1: a connected host with a
+        // workspace (an engine in this process), and one that can't be reached.
+        var server: RemoteServer?
+        if env["PSYDUCK_RENDER_HOSTS"] != nil {
+            let config = EngineConfig(gitPath: "/usr/bin/git",
+                                      workspacesRoot: scratch.appendingPathComponent("host/workspaces").path,
+                                      reposRoot: scratch.appendingPathComponent("host/repos").path)
+            server = RemoteServer(engine: WorkspaceEngine { config }, host: "psyduck")
+            settings.hosts = [RemoteHost(name: "studio", command: "in-process"),
+                              RemoteHost(name: "ec2", command: "echo 'ssh: connect to host ec2 port 22: Operation timed out' >&2; exit 255")]
+        }
+        let store = AppStore(settings: settings, stateURL: stateURL) { host in
+            guard host.command == "in-process", let server else { return RemoteEngine(command: host.command) }
+            return RemoteEngine {
+                let (near, far) = try LineConnection.pair()
+                Task { await server.serve(far) }
+                return near
+            }
+        }
+        if let studio = settings.hosts.first, let local = store.repos.first {
+            for _ in 0..<200 where !store.isConnected(studio.id) { try await Task.sleep(for: .milliseconds(20)) }
+            await store.cloneRepo(local.path, on: studio)
+            if let theirs = store.repos(on: studio.id).first {
+                await store.newWorkspace(in: theirs)
+                await store.newWorkspace(in: theirs)
+            }
+            store.selection = store.workspaces.first?.id
+        }
         let updater = UpdaterModel()
         let workspace = try XCTUnwrap(store.selectedWorkspace)
         await store.refreshChanges(workspace.id)
@@ -64,5 +91,8 @@ final class ScreenRenderTests: XCTestCase {
         if let file { store.closeDiff(file.path, in: workspace.id) }
         store.showingSettings = true
         try await render("3-settings-dark", RootLayout(mode: .constant(.code)) { ShellView() }, dark: true)
+        if !settings.hosts.isEmpty {
+            try await render("4-settings-hosts-light", RootLayout(mode: .constant(.code)) { ShellView() }, dark: false, height: 1500)
+        }
     }
 }

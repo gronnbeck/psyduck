@@ -29,6 +29,15 @@ Installed copies update themselves through Sparkle.
   `fix/login`).
 - Archiving a workspace removes its worktree and keeps the branch.
 
+## Remote hosts
+
+Agents can run on another machine and keep going when your Mac is asleep.
+The other machine runs `psyduck serve` (there is a container image in
+`docker/`); in the app, Settings → Remote hosts takes a name and the command
+that reaches it, usually `ssh <host> docker exec -i psyduck psyduck attach`.
+The host's workspaces show in the sidebar under its name. It is new and
+experimental: see [docs/REMOTE.md](docs/REMOTE.md).
+
 ## Desk
 
 The second icon in the left rail (⌘2; ⌘1 goes back to code) is **desk**: your
@@ -85,7 +94,9 @@ Local builds are ad-hoc signed and have no update feed, so Sparkle stays off.
 | `.github/workflows/macos.yml` | Build and test on every PR and push |
 | `.github/workflows/macos-release.yml` | Signed, notarized edge build, plus the Sparkle appcast |
 | `docs/DISTRIBUTION.md` | How releases work, and what secrets they need |
-| `docs/REMOTE.md` | Plan: run agents on a remote machine (psyduckd + CLI) |
+| `Sources/psyduck/` | The host side: `psyduck serve`, `attach`, `status` |
+| `docker/` | A container image for a host, and its compose file |
+| `docs/REMOTE.md` | Running agents on a remote machine: how to try it, the protocol, what's left |
 | `docs/EC2.md` | Spec: bootstrap a Linux EC2 host for psyduck from your Mac |
 
 ## License

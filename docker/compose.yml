@@ -1,0 +1,23 @@
+# A psyduck host on this machine. From the repo root:
+#   cp docker/.env.example docker/.env    # then fill it in
+#   docker compose -f docker/compose.yml up -d --build
+# The Mac app reaches it with:
+#   ssh <this machine> docker exec -i psyduck psyduck attach
+services:
+  psyduck:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: psyduck-host
+    container_name: psyduck
+    # The name the app shows beside the host.
+    hostname: psyduck
+    # Reaps the processes claude leaves behind.
+    init: true
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - psyduck-data:/data
+
+volumes:
+  psyduck-data:

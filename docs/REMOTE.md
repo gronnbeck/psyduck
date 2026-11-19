@@ -1,7 +1,63 @@
-# Remote workspaces (plan)
+# Remote workspaces
 
-Status: phase 1 is built (`PsyduckCore`, the engine and the event log, on
-macOS and Linux). Phases 2 and 3 are not.
+Status: phases 1 to 3 are built, in a first form you can experiment with.
+`psyduck serve` runs the engine on a host, the Mac app lists hosts in
+settings and shows their workspaces in the sidebar, and `docker/` has a
+container image for a host. Not built: static binaries and a release for
+them, a systemd unit, and the human-facing CLI (`run`, `events`).
+
+## Try it: a host in a container
+
+On the machine that will run the agents (a Mac with Docker works):
+
+```sh
+git clone https://github.com/gronnbeck/psyduck && cd psyduck
+cp docker/.env.example docker/.env     # fill in the tokens, see below
+docker compose -f docker/compose.yml up -d --build
+docker logs psyduck                    # "psyduck serving at …", and the claude it found
+```
+
+`docker/.env` holds the logins, which reach the container as environment
+variables and are never in the image:
+
+| Variable | What |
+|---|---|
+| `CLAUDE_CODE_OAUTH_TOKEN` | From `claude setup-token`, run anywhere with a browser |
+| `GH_TOKEN` | A GitHub token that can read and push your repos and open PRs (`gh auth token` prints your own) |
+| `GIT_USER_NAME`, `GIT_USER_EMAIL` | Who the agent's commits are from |
+
+Then in the Mac app: Settings → Remote hosts → Add a host. Give it a name
+and the command that reaches the server:
+
+```
+ssh studio docker exec -i psyduck psyduck attach
+```
+
+The app runs that command and talks to it over stdin and stdout, so ssh keys
+are the whole of the auth and no port is opened. Check the command in a
+terminal first: it should sit there silently, and print one line of JSON if
+you type `{"id":1,"method":"hello"}`. Two things that commonly go wrong:
+
+- ssh finds no `docker`, because a non-interactive ssh session has a short
+  `PATH`. Use the full path (`/usr/local/bin/docker`, or
+  `/opt/homebrew/bin/docker`).
+- ssh asks for a password or a host key. The app can't answer; set up a key
+  and connect once by hand.
+
+The host appears in the sidebar under its name. Clone a repo onto it with the
+arrow beside the name (the host clones it with its own git login), then make
+workspaces as usual. Close the laptop and the agent keeps going; the app
+catches up when it reconnects.
+
+Everything the host must keep is in the `psyduck-data` volume (`/data` in the
+container): state and event logs, the repos and worktrees, claude's own
+sessions, and `config.json` (model, permission mode). The image has git, gh
+and claude and nothing else, so a project that needs a toolchain needs an
+image built on top of it.
+
+Without Docker, the same thing by hand: `swift build -c release --product
+psyduck`, run `psyduck serve` under the account that has the logins, and use
+`ssh <host> psyduck attach` as the command.
 
 Hosts on EC2 are set up by the bootstrapper in [EC2.md](EC2.md).
 
@@ -23,13 +79,18 @@ PsyduckCore (SwiftPM, macOS + Linux)
   WorkspaceEngine   ← the runner and state pulled out of AppStore
   EventLog          ← per-workspace, append-only, sequence-numbered JSONL
 
-psyduckd     the server on the remote machine: WorkspaceEngine + API on a unix socket
-psyduck      the CLI client: run / status / events / attach / list
-Psyduck.app  the local engine, or connects to remote hosts (one sidebar section per host)
+psyduck      on the host, one binary:
+               serve    WorkspaceEngine behind a unix socket (~/.psyduck/psyduck.sock)
+               attach   joins stdin and stdout to that socket; what ssh runs
+               status   lists the host's repos and workspaces
+Psyduck.app  its own engine, plus one RemoteEngine per host (one sidebar section each)
 ```
 
-Only `AppStore` mixes engine logic with SwiftUI and AppKit, so splitting it is
-most of the refactor.
+`EngineClient` is what the app asks of any engine. `WorkspaceEngine` answers
+in-process; `RemoteEngine` sends the same calls over a connection to
+`RemoteServer`, which hands them to the host's `WorkspaceEngine`. The plan
+had a separate `psyduckd`; it is `psyduck serve` instead, so a host has one
+binary.
 
 ### Event log
 
@@ -63,28 +124,41 @@ local and remote workspaces behave the same way.
 Changed files and branch state (ahead/behind, dirty, PR) are not in the log.
 A client asks for them, as the app does every few seconds.
 
-## API
+## Wire protocol
 
-| Call | Does |
+One JSON object per line, both ways (`Wire` in `PsyduckCore`):
+
+```
+→ {"id":1,"method":"snapshot"}
+← {"id":1,"result":{"repos":[…],"workspaces":[…]}}
+→ {"id":2,"method":"events","params":{"workspace":"…","since":12,"sub":7}}
+← {"id":2,"result":{}}
+← {"sub":7,"event":{"seq":13,"type":"text",…}}     as they happen
+← {"id":3,"error":"that workspace doesn't exist"}
+```
+
+| Method | Does |
 |---|---|
-| `GET /workspaces` | Summaries: running, branch, ahead/behind, dirty count, PR |
-| `POST /workspaces {repo, baseRef?, prompt?}` | Create a workspace. With `prompt`, its first turn starts right away |
-| `GET /workspaces/:id` | Full state: changed files, branch, PR, current turn, cost |
-| `GET /workspaces/:id/diff?path=` | One file's diff |
-| `POST /workspaces/:id/turns {prompt}` | Start a turn, or queue it if one is running |
-| `GET /workspaces/:id/events?since=N` | Replay from N, then stay open for live events |
-| `POST /workspaces/:id/stop` | Stop the running turn |
-| `POST /workspaces/:id/action` | Run the primary action (`PrimaryAction.decide`) |
-
-The CLI mirrors these calls, and `--json` gives machine-readable output.
+| `hello` | The protocol version and the machine's name. A client and server with different versions refuse each other |
+| `snapshot` | Repos and workspaces |
+| `addRepo {path}`, `cloneRepo {url}`, `removeRepo {repo}` | Repos on the host |
+| `newWorkspace {repo, text?}` | Create a workspace. With `text`, its first turn starts right away |
+| `rename {workspace, name}`, `archive {workspace}` | As in the app |
+| `send {workspace, text}` | Start a turn, or queue it if one is running |
+| `stop {workspace}` | Stop the running turn |
+| `events {workspace, since, sub}` | Replay after `since`, then live events, tagged with the client's `sub`. `unsubscribe {sub}` ends it |
+| `changedFiles`, `diff {file}`, `branchState {network}` | What the changes panel asks for |
+| `perform {action}`, `discard` | The primary action, and discard |
 
 ## Transport and auth
 
 SSH, with no open port.
 
-- `psyduckd` listens on `~/.psyduck/psyduckd.sock` on the remote machine.
+- `psyduck serve` listens on `~/.psyduck/psyduck.sock` on the remote machine,
+  readable only by its own user.
 - A client reaches it with `ssh <host> psyduck attach`, which connects
-  stdio to the socket using JSON-RPC, or with SSH's unix-socket forwarding.
+  stdio to the socket. The app runs whatever command the host is given, so
+  `docker exec` or a jump host fit in the same line.
 - SSH keys are the auth, and it works over Tailscale.
 - HTTP with a bearer token can wait until a non-SSH client needs it.
 
@@ -137,10 +211,13 @@ your own Mac.
 1. **`PsyduckCore` + event log.** Extract the engine as a SwiftPM package that
    builds on macOS and Linux, and add a Linux CI job. The Mac app behaves the
    same on top of it, and the existing tests pin that behaviour.
-2. **`psyduckd` + `psyduck` CLI.** Ship static Linux binaries and a systemd
-   user unit. Try them against a real Linux box over SSH.
-3. **Remote hosts in the app.** Add a host in settings, and its workspaces
-   show in the sidebar under it.
+2. **`psyduck serve` + `attach`.** Built, with a container image. Still to
+   do: static Linux binaries in the edge release, a systemd user unit, and
+   the commands for people and for Claude as a client (`run`, `events`).
+3. **Remote hosts in the app.** Built: add a host in settings, and its
+   workspaces show in the sidebar under it. Still to do: the app's model and
+   permission settings don't reach a host (it reads its own `config.json`),
+   and there is no notification when a remote turn finishes.
 4. *(Maybe)* HTTP + auth, and an MCP server for clients that have no shell.
 
 ## Open questions
