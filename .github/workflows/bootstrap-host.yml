@@ -1,0 +1,30 @@
+name: Host bootstrap script
+
+# Lints scripts/bootstrap-host.sh and runs it for real in a fresh Ubuntu
+# container. No secrets, so it is safe on pull requests.
+on:
+  push:
+    branches: [main]
+    paths: ["scripts/bootstrap-host.sh", ".github/workflows/bootstrap-host.yml"]
+  pull_request:
+    paths: ["scripts/bootstrap-host.sh", ".github/workflows/bootstrap-host.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    name: Lint and run on Ubuntu 24.04
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck scripts/bootstrap-host.sh
+      - name: Run it twice in a fresh container
+        run: |
+          docker run --rm -v "$PWD/scripts":/s:ro ubuntu:24.04 bash -euc '
+            bash /s/bootstrap-host.sh --no-login
+            bash /s/bootstrap-host.sh --no-login
+            runuser -u ubuntu -- bash -lc "git --version && gh --version && claude --version"
+            test -d /home/ubuntu/psyduck/workspaces
+          '
