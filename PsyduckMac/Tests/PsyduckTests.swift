@@ -103,6 +103,16 @@ final class AppStoreTests: XCTestCase {
         XCTAssertTrue(relaunched.workspaces.isEmpty)
     }
 
+    /// A long session shows its newest rows, and lets go of old ones in steps.
+    func testALongSessionShowsItsNewestRows() {
+        XCTAssertEqual(ChatView.hiddenRows(of: 80, earlier: 0), 0)
+        XCTAssertEqual(ChatView.hiddenRows(of: 119, earlier: 0), 0)
+        XCTAssertEqual(ChatView.hiddenRows(of: 120, earlier: 0), 40)
+        XCTAssertEqual(ChatView.hiddenRows(of: 2520, earlier: 0), 2440)
+        XCTAssertEqual(ChatView.hiddenRows(of: 2520, earlier: 200), 2240)
+        XCTAssertEqual(ChatView.hiddenRows(of: 150, earlier: 200), 0)
+    }
+
     /// A chat turn, with a script standing in for claude: the engine's
     /// events have to reach the store's transcript, changes and cost.
     @MainActor

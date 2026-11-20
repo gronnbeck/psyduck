@@ -7,6 +7,8 @@ struct ChatView: View {
     let workspace: Workspace
     @State private var draft = ""
     @FocusState private var focused: Bool
+    /// How many rows to show beyond the newest ones; "Show earlier" adds to it.
+    @State private var earlier = 0
 
     private var session: Transcript { store.transcript(workspace.id) }
     private var items: [ChatItem] { session.items }
@@ -70,8 +72,8 @@ struct ChatView: View {
     // MARK: Transcript
 
     /// The transcript as flat rows: each of your messages, then everything
-    /// Claude did in reply under one avatar. Flat, so the stack can be lazy
-    /// and a long session builds only the rows on screen.
+    /// Claude did in reply under one avatar. Flat, so a long session can show
+    /// only its newest rows.
     private var rows: [Row] {
         var rows: [Row] = []
         var inReply = false
@@ -108,7 +110,10 @@ struct ChatView: View {
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
+                // Not a lazy stack: one pinned to the bottom guesses its height,
+                // and opens (or lands after a new message) on empty space past
+                // its rows. A long session shows its newest rows instead.
+                VStack(alignment: .leading, spacing: 0) {
                     if items.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("New workspace").font(.display(22))
@@ -118,7 +123,17 @@ struct ChatView: View {
                         }
                         .padding(.bottom, 24)
                     }
-                    let rows = self.rows
+                    let all = self.rows
+                    let hidden = Self.hiddenRows(of: all.count, earlier: earlier)
+                    if hidden > 0 {
+                        Button("Show earlier messages") { earlier += Self.step }
+                            .buttonStyle(.plain)
+                            .font(.sans(12, .medium))
+                            .foregroundStyle(Tk.inkMuted)
+                            .frame(maxWidth: .infinity)
+                            .padding(.bottom, 24)
+                    }
+                    let rows = all.dropFirst(hidden)
                     ForEach(rows) { row in
                         RowView(row: row, first: row.id == rows.first?.id).equatable()
                     }
@@ -134,15 +149,18 @@ struct ChatView: View {
             .defaultScrollAnchor(.bottom)
             .onChange(of: items.count) { proxy.scrollTo("bottom", anchor: .bottom) }
             .onChange(of: session.streaming) { proxy.scrollTo("bottom", anchor: .bottom) }
-            .task {
-                // A lazy stack only guesses its height at first, and can open
-                // scrolled past its rows. Go to the end once it has settled.
-                for delay in [0, 60, 250] {
-                    try? await Task.sleep(for: .milliseconds(delay))
-                    proxy.scrollTo("bottom", anchor: .bottom)
-                }
-            }
         }
+    }
+
+    /// Rows shown at first, and how many more each "Show earlier" brings.
+    static let newest = 80
+    static let step = 200
+
+    /// How many of a session's oldest rows to leave out. Moves in steps as the
+    /// session grows, so rows don't leave the top one by one while you read.
+    static func hiddenRows(of count: Int, earlier: Int) -> Int {
+        let over = count - newest - earlier
+        return over <= 0 ? 0 : over / 40 * 40
     }
 
     // MARK: Composer
